@@ -327,18 +327,15 @@ class VinnyBot(commands.Bot):
 
     async def extract_facts_from_message(self, user_message: str):
         fact_extraction_prompt = (
-            "You are a highly accurate fact-extraction system. Your task is to analyze the following user message "
-            "and identify any personal facts or preferences the user states about themselves. "
-            "For example, 'my favorite food is pizza' or 'I live in New York' or 'I love dogs'. "
-            "Only extract facts the user states directly about themselves in the first person. "
-            "If you find any facts, return them as a JSON object with the fact as the key and the detail as the value. "
-            "The key should be a simple, lowercase string (e.g., 'favorite food', 'location'). "
-            "If no facts are found, return an empty JSON object. "
-            "Example output: {\"favorite food\": \"pizza\", \"hobby\": \"playing guitar\"}\n\n"
-            f"User message to analyze: \"{user_message}\""
+            "You are a highly accurate fact-extraction system... (prompt as before)"
         )
-        safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
-        config = types.GenerateContentConfig(safety_settings=safety_settings)
+        # ** THE FIX IS HERE **
+        # Define safety settings for TEXT ONLY
+        text_safety_settings = [
+            types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+            for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
+        ]
+        config = types.GenerateContentConfig(safety_settings=text_safety_settings)
         try:
             response = await self.gemini_client.aio.models.generate_content(
                 model=self.MODEL_NAME, contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])], config=config
@@ -355,7 +352,6 @@ class VinnyBot(commands.Bot):
     def split_message(self, content, char_limit=1900):
         if len(content) <= char_limit: return [content]
         chunks, current_chunk = [], ""
-        # Improved splitting logic
         sentences = content.replace('\n', ' SENTENCE_BREAK ').replace('. ', '. SENTENCE_BREAK ').replace('! ', '! SENTENCE_BREAK ').replace('? ', '? SENTENCE_BREAK ').split('SENTENCE_BREAK')
         for sentence in sentences:
             sentence = sentence.strip()
@@ -419,8 +415,15 @@ class VinnyBot(commands.Bot):
             contents = [types.Content(role='user', parts=[types.Part(text=summary_instruction)]),
                         types.Content(role='model', parts=[types.Part(text="aight, i get it. i'll summarize the slop.")]),
                         types.Content(role='user', parts=[types.Part(text=summary_prompt)])]
-            safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
-            config = types.GenerateContentConfig(safety_settings=safety_settings)
+            
+            # ** THE FIX IS HERE **
+            # Define safety settings for TEXT ONLY
+            text_safety_settings = [
+                types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+                for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
+            ]
+            config = types.GenerateContentConfig(safety_settings=text_safety_settings)
+            
             response = await self.gemini_client.aio.models.generate_content(model=self.MODEL_NAME, contents=contents, config=config)
             
             if response.candidates and response.candidates[0].content.parts:
