@@ -73,7 +73,6 @@ class VinnyLogic(commands.Cog):
                         f"The user '{message.author.display_name}' asked you to tag the user '{target_member.display_name}'. You found them. "
                         f"Generate a short, in-character response to announce that you are tagging them. Be sassy, cranky, or flirty about it."
                     )
-                    # ** THE FIX IS HERE **
                     text_safety_settings = [
                         types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
                         for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
@@ -160,7 +159,6 @@ class VinnyLogic(commands.Cog):
                     await self.update_vinny_mood()
                     dynamic_persona_injection = f"right now, your current mood is '{self.bot.current_mood}'."
                     
-                    # ** THE FIX IS HERE **
                     text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
                     full_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
                     final_safety_settings = full_safety_settings if is_multimodal_reply else text_safety_settings
@@ -241,7 +239,7 @@ class VinnyLogic(commands.Cog):
                     cleaned_for_triggers = cleaned_for_triggers[len(name):].strip(" ,:;")
                     break
             
-            # Image Generation Trigger
+            # ** RESTORED: Image Generation & Self-Portrait Logic **
             image_trigger_keywords = ["paint", "draw", "make a picture of", "create an image of", "generate an image of"]
             image_prompt = ""
             for keyword in image_trigger_keywords:
@@ -249,11 +247,55 @@ class VinnyLogic(commands.Cog):
                     image_prompt = cleaned_for_triggers[len(keyword):].strip()
                     break
             if image_prompt:
+                if not image_prompt:
+                    await message.channel.send("eh? what you want vinny to paint? you gotta tell me.")
+                    return
+
+                descriptive_image_prompt = image_prompt
+                vinny_replacement_text = "a masterpiece painting of Vinny, a middle-aged man with a robust build, long dark brown hair, a full beard, a distinctive dark blue coat, holding a bottle of red wine and a slice of pepperoni pizza"
+                self_portrait_keywords = ["yourself", "you", "vinny", "a picture of you", "a self portrait"]
+                self_portrait_keywords.sort(key=len, reverse=True)
+
+                for keyword in self_portrait_keywords:
+                    pattern = r'\b' + re.escape(keyword) + r'\b'
+                    if re.search(pattern, image_prompt, re.IGNORECASE):
+                        descriptive_image_prompt = re.sub(pattern, vinny_replacement_text, image_prompt, count=1, flags=re.IGNORECASE)
+                        break
+
                 async with message.channel.typing():
                     await message.channel.send(random.choice([f"hmmm, '{image_prompt}', eh? aight...", f"'{image_prompt}'... what am i, a magician? fine."]))
-                    image_file = await self.bot.generate_image_with_imagen(image_prompt)
-                    if image_file: await message.channel.send("here, i made this for ya.", file=discord.File(image_file, filename="vinny_masterpiece.png"))
-                    else: await message.channel.send("ah, crap. vinny's hands are a bit shaky today.")
+                    await message.channel.send("aight, aight, vinny's gettin' his brushes...")
+                    
+                    image_file = await self.bot.generate_image_with_imagen(descriptive_image_prompt)
+
+                    if image_file:
+                        response_text = "here, i made this for ya."
+                        if self.bot.API_CALL_COUNTS["text_generation"] < self.bot.TEXT_GENERATION_LIMIT:
+                            try:
+                                text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
+                                dynamic_persona_injection = f"right now, your current mood is '{self.bot.current_mood}'." # Get current mood for the comment
+                                comment_prompt = (
+                                    f"{self.bot.personality_instruction}\n{dynamic_persona_injection}\n\nYou just finished painting a picture of '{image_prompt}'. "
+                                    f"Generate a short, single-paragraph response to show them your work. "
+                                    f"Comment on the subject, but DO NOT repeat '{image_prompt}'. Be chaotic, funny, or complain."
+                                )
+                                comment_response = await self.bot.gemini_client.aio.models.generate_content(
+                                    model=self.bot.MODEL_NAME,
+                                    contents=[types.Content(role='user', parts=[types.Part(text=comment_prompt)])],
+                                    config=types.GenerateContentConfig(safety_settings=text_safety_settings)
+                                )
+                                if comment_response.text:
+                                    response_text = comment_response.text
+                                self.bot.API_CALL_COUNTS["text_generation"] += 1
+                                await self.bot.update_api_count_in_firestore()
+                            except Exception as e:
+                                sys.stderr.write(f"ERROR: Failed to generate creative image comment: {e}\n")
+                                response_text = "here, i painted the thing for ya. my brain's too fuzzy to talk about it right now."
+                        else:
+                            response_text = "my brain's fried from paintin' all day. just take it."
+                        await message.channel.send(response_text, file=discord.File(image_file, filename="vinny_masterpiece.png"))
+                    else:
+                        await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
                 return
 
             # Tagging Trigger
@@ -330,7 +372,6 @@ class VinnyLogic(commands.Cog):
                     self.bot.API_CALL_COUNTS["text_generation"] += 1
                     await self.bot.update_api_count_in_firestore()
 
-                    # ** THE FIX IS HERE **
                     text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
                     full_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
                     final_safety_settings = full_safety_settings if is_multimodal else text_safety_settings
