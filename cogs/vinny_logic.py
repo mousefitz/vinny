@@ -73,11 +73,15 @@ class VinnyLogic(commands.Cog):
                         f"The user '{message.author.display_name}' asked you to tag the user '{target_member.display_name}'. You found them. "
                         f"Generate a short, in-character response to announce that you are tagging them. Be sassy, cranky, or flirty about it."
                     )
-                    safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
+                    # ** THE FIX IS HERE **
+                    text_safety_settings = [
+                        types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+                        for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
+                    ]
                     api_response = await self.bot.gemini_client.aio.models.generate_content(
                         model=self.bot.MODEL_NAME,
                         contents=[types.Content(role='user', parts=[types.Part(text=tagging_prompt)])],
-                        config=types.GenerateContentConfig(safety_settings=safety_settings)
+                        config=types.GenerateContentConfig(safety_settings=text_safety_settings)
                     )
                     if api_response.text:
                         response_text = f"{api_response.text.strip()} <@{target_member.id}>"
@@ -143,7 +147,9 @@ class VinnyLogic(commands.Cog):
                 try:
                     replied_to_message = await message.channel.fetch_message(message.reference.message_id)
                     prompt_parts = []
+                    is_multimodal_reply = False
                     if replied_to_message.attachments and "image" in replied_to_message.attachments[0].content_type:
+                        is_multimodal_reply = True
                         attachment = replied_to_message.attachments[0]
                         image_bytes = await attachment.read()
                         prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
@@ -153,7 +159,11 @@ class VinnyLogic(commands.Cog):
 
                     await self.update_vinny_mood()
                     dynamic_persona_injection = f"right now, your current mood is '{self.bot.current_mood}'."
-                    safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
+                    
+                    # ** THE FIX IS HERE **
+                    text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
+                    full_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
+                    final_safety_settings = full_safety_settings if is_multimodal_reply else text_safety_settings
                     
                     final_reply_prompt_parts = [types.Part(text=f"{self.bot.personality_instruction}\n{dynamic_persona_injection}\n\n"), *prompt_parts]
                     
@@ -161,7 +171,7 @@ class VinnyLogic(commands.Cog):
                         response = await self.bot.gemini_client.aio.models.generate_content(
                             model=self.bot.MODEL_NAME,
                             contents=[types.Content(role='user', parts=final_reply_prompt_parts)],
-                            config=types.GenerateContentConfig(safety_settings=safety_settings)
+                            config=types.GenerateContentConfig(safety_settings=final_safety_settings)
                         )
                         if response.text and response.text.strip():
                             for chunk in self.bot.split_message(response.text):
@@ -181,8 +191,6 @@ class VinnyLogic(commands.Cog):
             elif 18 <= local_now.hour < 22: time_of_day_comment = "it's the evening, a good time for a drink."
             else: time_of_day_comment = "it's late at night, and your thoughts are extra scattered."
             
-            safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
-            
             # Name Saving Logic
             name_patterns = [r"my name is\s+([A-Z][a-z]{2,})", r"call me\s+([A-Z][a-z]{2,})", r"you can call me\s+([A-Z][a-z]{2,})", r"i'm\s+([A-Z][a-z]{2,})", r"i am\s+([A-Z][a-z]{2,})"]
             for pattern in name_patterns:
@@ -198,33 +206,31 @@ class VinnyLogic(commands.Cog):
 
             effective_message_content = message.content
             prompt_parts = [types.Part(text=effective_message_content)]
+            is_multimodal = False
             if message.attachments:
                 for attachment in message.attachments:
                     if attachment.content_type and "image" in attachment.content_type:
+                        is_multimodal = True
                         image_bytes = await attachment.read()
                         prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
             
             message_content_lower = effective_message_content.lower()
             
-            # --- FULLY RESTORED REACTION LOGIC ---
+            # Reaction Logic
             explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
             if "pie" in message_content_lower and random.random() < 0.75:
                 await message.add_reaction('🥧')
             elif any(keyword in message_content_lower for keyword in explicit_reaction_keywords):
                 try:
-                    if message.guild and message.guild.emojis:
-                        emoji = random.choice(message.guild.emojis)
-                    else:
-                        emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
+                    if message.guild and message.guild.emojis: emoji = random.choice(message.guild.emojis)
+                    else: emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
                     await message.add_reaction(emoji)
                 except Exception as e:
                     sys.stderr.write(f"ERROR: Failed to add explicit reaction: {e}\n")
             elif random.random() < self.bot.reaction_chance and not self.bot.user.mentioned_in(message):
                 try:
-                    if message.guild and message.guild.emojis:
-                        emoji = random.choice(message.guild.emojis)
-                    else:
-                        emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
+                    if message.guild and message.guild.emojis: emoji = random.choice(message.guild.emojis)
+                    else: emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
                     await message.add_reaction(emoji)
                 except Exception as e:
                     sys.stderr.write(f"ERROR: Failed to add random reaction: {e}\n")
@@ -266,10 +272,8 @@ class VinnyLogic(commands.Cog):
             if any(trigger in message_content_lower for trigger in name_recall_triggers):
                 user_id = str(message.author.id)
                 nickname = await self.bot.get_user_nickname(user_id)
-                if nickname:
-                    await message.channel.send(f"your name? uh... vinny's head is fuzzy... but i think they call ya {nickname}, right?")
-                else:
-                    await message.channel.send("your name? nah, i got nothin'. you never told me your name, pal.")
+                if nickname: await message.channel.send(f"your name? uh... vinny's head is fuzzy... but i think they call ya {nickname}, right?")
+                else: await message.channel.send("your name? nah, i got nothin'. you never told me your name, pal.")
                 return
 
             # Text Response Logic
@@ -287,9 +291,7 @@ class VinnyLogic(commands.Cog):
             lock = self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock())
             async with lock:
                 async with message.channel.typing():
-                    # --- Build Context and History ---
-                    user_id = str(message.author.id)
-                    guild_id = str(message.guild.id) if message.guild else None
+                    user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
                     user_profile = await self.bot.get_user_profile(user_id, guild_id)
                     profile_facts, relationship_status = [], "neutral"
                     if user_profile:
@@ -316,31 +318,27 @@ class VinnyLogic(commands.Cog):
                     final_prompt_parts = [types.Part(text=final_instruction_text), *prompt_parts]
                     history.append(types.Content(role='user', parts=final_prompt_parts))
                     
-                    # Search Grounding Logic
-                    should_use_search = False
+                    should_use_search, tools = False, []
                     question_words = ["who is", "what is", "where is", "when is", "how is"]
                     if "?" in effective_message_content or any(word in message_content_lower for word in question_words):
                         if self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                            should_use_search = True
-                            self.bot.API_CALL_COUNTS["search_grounding"] += 1
-                    
-                    tools = []
+                            should_use_search, self.bot.API_CALL_COUNTS["search_grounding"] = True, self.bot.API_CALL_COUNTS["search_grounding"] + 1
                     if should_use_search:
-                        sys.stderr.write("DEBUG: Grounding with Google Search enabled for this request.\n")
-                        tool = types.Tool(google_search=types.GoogleSearch())
-                        tools = [tool]
+                        sys.stderr.write("DEBUG: Grounding with Google Search enabled.\n")
+                        tools = [types.Tool(google_search=types.GoogleSearch())]
 
                     self.bot.API_CALL_COUNTS["text_generation"] += 1
                     await self.bot.update_api_count_in_firestore()
 
-                    config = types.GenerateContentConfig(safety_settings=safety_settings, tools=tools)
-                    response = await self.bot.gemini_client.aio.models.generate_content(
-                        model=self.bot.MODEL_NAME, contents=history, config=config
-                    )
+                    # ** THE FIX IS HERE **
+                    text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
+                    full_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
+                    final_safety_settings = full_safety_settings if is_multimodal else text_safety_settings
                     
-                    # Function Call Processing Loop
+                    config = types.GenerateContentConfig(safety_settings=final_safety_settings, tools=tools)
+                    response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
+                    
                     while response.candidates and response.candidates[0].content.parts[0].function_call:
-                        sys.stderr.write("DEBUG: Model returned a function call, processing now.\n")
                         function_call = response.candidates[0].content.parts[0].function_call
                         if function_call.name == 'Google Search':
                             tool_response = self.bot.gemini_client.tools.google_search(function_call.args)
@@ -348,8 +346,7 @@ class VinnyLogic(commands.Cog):
                             history.append(response.candidates[0].content)
                             history.append(types.Content(parts=[function_response_part]))
                             response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
-                        else:
-                            break
+                        else: break
 
                     if response.prompt_feedback and response.prompt_feedback.block_reason:
                         sys.stderr.write(f"API call blocked. Reason: {response.prompt_feedback.block_reason.name}")
@@ -358,15 +355,11 @@ class VinnyLogic(commands.Cog):
 
                     raw_response_text = response.text
                     if raw_response_text and raw_response_text.strip().lower() != '[silence]':
-                        # ** RESTORED: Max Response Length Check **
-                        message_chunks = self.bot.split_message(raw_response_text)
-                        total_chars_sent = 0
-                        MAX_RESPONSE_CHARS = 750
+                        message_chunks, total_chars_sent, MAX_RESPONSE_CHARS = self.bot.split_message(raw_response_text), 0, 750
                         for chunk in message_chunks:
                             if total_chars_sent + len(chunk) > MAX_RESPONSE_CHARS:
                                 remaining_chars = MAX_RESPONSE_CHARS - total_chars_sent
-                                if remaining_chars > 20:
-                                    await message.channel.send(chunk[:remaining_chars].rsplit(' ', 1)[0] + "...")
+                                if remaining_chars > 20: await message.channel.send(chunk[:remaining_chars].rsplit(' ', 1)[0] + "...")
                                 break
                             await message.channel.send(chunk.lower())
                             total_chars_sent += len(chunk)
