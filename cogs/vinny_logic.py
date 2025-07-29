@@ -358,8 +358,18 @@ class VinnyLogic(commands.Cog):
 
                     raw_response_text = response.text
                     if raw_response_text and raw_response_text.strip().lower() != '[silence]':
-                        for chunk in self.bot.split_message(raw_response_text):
+                        # ** RESTORED: Max Response Length Check **
+                        message_chunks = self.bot.split_message(raw_response_text)
+                        total_chars_sent = 0
+                        MAX_RESPONSE_CHARS = 750
+                        for chunk in message_chunks:
+                            if total_chars_sent + len(chunk) > MAX_RESPONSE_CHARS:
+                                remaining_chars = MAX_RESPONSE_CHARS - total_chars_sent
+                                if remaining_chars > 20:
+                                    await message.channel.send(chunk[:remaining_chars].rsplit(' ', 1)[0] + "...")
+                                break
                             await message.channel.send(chunk.lower())
+                            total_chars_sent += len(chunk)
                             await asyncio.sleep(random.uniform(1.0, 1.5))
 
                     if self.bot.PASSIVE_LEARNING_ENABLED and not image_prompt:
