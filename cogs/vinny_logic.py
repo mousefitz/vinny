@@ -159,9 +159,11 @@ class VinnyLogic(commands.Cog):
                     await self.update_vinny_mood()
                     dynamic_persona_injection = f"right now, your current mood is '{self.bot.current_mood}'."
                     
-                    text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
-                    full_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
-                    final_safety_settings = full_safety_settings if is_multimodal_reply else text_safety_settings
+                    # Use only text safety settings for text generation, even with an image
+                    safety_settings = [
+                        types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+                        for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
+                    ]
                     
                     final_reply_prompt_parts = [types.Part(text=f"{self.bot.personality_instruction}\n{dynamic_persona_injection}\n\n"), *prompt_parts]
                     
@@ -169,7 +171,7 @@ class VinnyLogic(commands.Cog):
                         response = await self.bot.gemini_client.aio.models.generate_content(
                             model=self.bot.MODEL_NAME,
                             contents=[types.Content(role='user', parts=final_reply_prompt_parts)],
-                            config=types.GenerateContentConfig(safety_settings=final_safety_settings)
+                            config=types.GenerateContentConfig(safety_settings=safety_settings)
                         )
                         if response.text and response.text.strip():
                             for chunk in self.bot.split_message(response.text):
@@ -184,10 +186,15 @@ class VinnyLogic(commands.Cog):
             await self.update_vinny_mood()
             utc_now = datetime.datetime.now(datetime.UTC)
             local_now = utc_now.astimezone(ZoneInfo("America/New_York"))
-            time_of_day_comment = "it's the afternoon."
-            if 5 <= local_now.hour < 12: time_of_day_comment = "it's the morning, so you're feeling groggy."
-            elif 18 <= local_now.hour < 22: time_of_day_comment = "it's the evening, a good time for a drink."
-            else: time_of_day_comment = "it's late at night, and your thoughts are extra scattered."
+
+            if 5 <= local_now.hour < 12:
+                time_of_day_comment = "it's the morning, so you're feeling groggy."
+            elif 12 <= local_now.hour < 18:
+                time_of_day_comment = "it's the afternoon."
+            elif 18 <= local_now.hour < 22:
+                time_of_day_comment = "it's the evening, a good time for a drink."
+            else:
+                time_of_day_comment = "it's late at night, and your thoughts are extra scattered."
             
             # Name Saving Logic
             name_patterns = [r"my name is\s+([A-Z][a-z]{2,})", r"call me\s+([A-Z][a-z]{2,})", r"you can call me\s+([A-Z][a-z]{2,})", r"i'm\s+([A-Z][a-z]{2,})", r"i am\s+([A-Z][a-z]{2,})"]
@@ -239,7 +246,7 @@ class VinnyLogic(commands.Cog):
                     cleaned_for_triggers = cleaned_for_triggers[len(name):].strip(" ,:;")
                     break
             
-            # --- Smart Image Prompt Generation ---
+            # Smart Image Prompt Generation
             image_trigger_keywords = ["paint", "draw", "make a picture of", "create an image of", "generate an image of"]
             image_prompt = ""
             for keyword in image_trigger_keywords:
@@ -248,8 +255,7 @@ class VinnyLogic(commands.Cog):
                     break
             if image_prompt:
                 async with message.channel.typing():
-                    # --- Step 1: Dynamically generate a "thinking" message ---
-                    thinking_message = "aight, lemme get my brushes..." # Fallback message
+                    thinking_message = "aight, lemme get my brushes..." # Fallback
                     try:
                         thinking_prompt = (
                             f"You are Vinny, an eccentric artist. A user just asked you to paint '{image_prompt}'.\n"
@@ -269,8 +275,7 @@ class VinnyLogic(commands.Cog):
                         sys.stderr.write(f"ERROR: Failed to generate dynamic thinking message: {e}\n")
                     
                     await message.channel.send(thinking_message)
-                    
-                    # --- Step 2: Create a meta-prompt to rewrite the user's prompt ---
+
                     prompt_rewriter_instruction = (
                         f"You are Vinny, an eccentric and chaotic artist. A user wants you to paint a picture. Their simple request is: '{image_prompt}'.\n"
                         f"Your task is to rewrite this simple request into a rich, detailed, and artistic prompt for an image generation AI. Infuse it with your personality.\n"
@@ -280,7 +285,6 @@ class VinnyLogic(commands.Cog):
                         f"The final rewritten prompt should be a single, descriptive paragraph. Do not write any other text."
                     )
                     
-                    # --- Step 3: Call the LLM to get the smarter prompt ---
                     try:
                         rewritten_prompt_response = await self.bot.gemini_client.aio.models.generate_content(
                             model=self.bot.MODEL_NAME,
@@ -293,11 +297,9 @@ class VinnyLogic(commands.Cog):
                         sys.stderr.write(f"ERROR: Failed to rewrite image prompt, using original. Error: {e}\n")
                         smarter_prompt = image_prompt
                     
-                    # --- Step 4: Generate the image using the smarter prompt ---
                     image_file = await self.bot.generate_image_with_imagen(smarter_prompt)
                     
                     if image_file:
-                        # --- Step 5: Generate a creative comment about the finished art ---
                         response_text = "here, i made this for ya." # Fallback text
                         try:
                             comment_prompt = (
@@ -392,11 +394,12 @@ class VinnyLogic(commands.Cog):
                     self.bot.API_CALL_COUNTS["text_generation"] += 1
                     await self.bot.update_api_count_in_firestore()
 
-                    text_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]]
-                    full_safety_settings = [types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE) for cat in types.HarmCategory]
-                    final_safety_settings = full_safety_settings if is_multimodal else text_safety_settings
+                    safety_settings = [
+                        types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+                        for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
+                    ]
                     
-                    config = types.GenerateContentConfig(safety_settings=final_safety_settings, tools=tools)
+                    config = types.GenerateContentConfig(safety_settings=safety_settings, tools=tools)
                     response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
                     
                     while response.candidates and response.candidates[0].content.parts[0].function_call:
