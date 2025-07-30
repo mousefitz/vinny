@@ -470,59 +470,61 @@ class VinnyLogic(commands.Cog):
         if proposer == member:
             await ctx.send("proposin' to yourself? i mean, i get it. self-love is important. but this ain't it, pal.")
             return
-        
-        success = await self.bot.save_proposal(str(ctx.guild.id), str(proposer.id), str(member.id))
-        if success:
-            await ctx.send(f"whoa, get a load of this! {proposer.mention} is on one knee for {member.mention}. you got five minutes to say yes with `!marry @{proposer.display_name}`, {member.display_name}. don't screw it up.")
-        else:
-            await ctx.send("my head's spinnin'. couldn't get the proposal paperwork filed.")
-
-    # In vinny/cogs/vinny_logic.py
-
-    @commands.command(name='propose')
-    async def propose_command(self, ctx, member: discord.Member):
-        """Proposes to another user."""
-        proposer = ctx.author
-        if proposer == member:
-            await ctx.send("proposin' to yourself? i mean, i get it. self-love is important. but this ain't it, pal.")
-            return
-        
-        # --- NEW: Check if the user is proposing to Vinny ---
         if member == self.bot.user:
             await ctx.send(f"whoa there, {proposer.mention}. i'm flattered, really, but i'm a lone wolf. a chaotic artist married to his... well, his chaos. and his rum. i'm off the market, sweetie. salute!")
             return
-
-        # --- NEW: Check if the user is proposing to another bot ---
         if member.bot:
             await ctx.send(f"you're proposin' to {member.mention}? a robot? listen, i'm all for weird, but that's a bit much even for me. find someone with a real pulse, pal.")
             return
-
-        success = await self.bot.save_proposal(str(ctx.guild.id), str(proposer.id), str(member.id))
+        
+        # Call the global function without guild_id
+        success = await self.bot.save_proposal(str(proposer.id), str(member.id))
         if success:
             await ctx.send(f"whoa, get a load of this! {proposer.mention} is on one knee for {member.mention}. you got five minutes to say yes with `!marry @{proposer.display_name}`, {member.display_name}. don't screw it up.")
         else:
             await ctx.send("my head's spinnin'. couldn't get the proposal paperwork filed.")
+
+    @commands.command(name='marry')
+    async def marry_command(self, ctx, member: discord.Member):
+        """Accepts a proposal from another user."""
+        recipient = ctx.author
+        proposer = member
+        
+        # Check for a global proposal
+        proposal = await self.bot.check_proposal(str(proposer.id), str(recipient.id))
+        if not proposal:
+            await ctx.send(f"what're you doin'? {proposer.display_name} didn't propose to you. at least not recently. you're makin' things awkward.")
+            return
+        
+        # Finalize the marriage globally
+        success = await self.bot.finalize_marriage(str(proposer.id), str(recipient.id))
+        if success:
+            await ctx.send(f":tada: they said yes! :tada:\nby the power vested in me by... somethin', i now pronounce {proposer.mention} and {recipient.mention} hitched! now get a room. salute!")
+        else:
+            await ctx.send("ugh, i tried to sign the marriage license but my hands are shaky. somethin' went wrong.")
 
     @commands.command(name='divorce')
     async def divorce_command(self, ctx):
         """Divorces your current partner."""
         user1 = ctx.author
-        user1_profile = await self.bot.get_user_profile(str(user1.id), str(ctx.guild.id))
+        # Get the global user profile (guild_id is None)
+        user1_profile = await self.bot.get_user_profile(str(user1.id), None)
         
         if not user1_profile or "married_to" not in user1_profile:
             await ctx.send("you ain't married to nobody, pal. can't divorce a ghost.")
             return
         
         user2_id = user1_profile["married_to"]
-        success = await self.bot.process_divorce(str(ctx.guild.id), str(user1.id), user2_id)
+        # Process the divorce globally
+        success = await self.bot.process_divorce(str(user1.id), user2_id)
         
-        # Try to get the other user's mention, but it's okay if they've left the server
         user2_mention = f"<@{user2_id}>"
         try:
-            user2 = await ctx.guild.fetch_member(user2_id)
+            # We can still try to fetch the user to get their name
+            user2 = await self.bot.fetch_user(user2_id)
             user2_mention = user2.mention
         except discord.NotFound:
-            pass # User might not be in the server anymore
+            pass
 
         if success:
             await ctx.send(f"well, it's over. {user1.mention} has split from {user2_mention}. another one bites the dust. here's your divorce papers. 📜")
@@ -531,21 +533,23 @@ class VinnyLogic(commands.Cog):
 
     @commands.command(name='ballandchain')
     async def ballandchain_command(self, ctx):
-        """Checks your current marriage status in the server."""
+        """Checks your current marriage status."""
         user = ctx.author
-        user_profile = await self.bot.get_user_profile(str(user.id), str(ctx.guild.id))
+        # Get the global user profile (guild_id is None)
+        user_profile = await self.bot.get_user_profile(str(user.id), None)
 
         if user_profile and user_profile.get("married_to"):
             partner_id = user_profile.get("married_to")
             marriage_date = user_profile.get("marriage_date", "a date vinny forgot to write down")
             
-            partner_member = None
+            partner_user = None
             try:
-                partner_member = await ctx.guild.fetch_member(partner_id)
+                # fetch_user is global, better for finding users not in the current server
+                partner_user = await self.bot.fetch_user(partner_id)
             except discord.NotFound:
                 pass 
             
-            partner_name = partner_member.display_name if partner_member else f"someone who ain't around (ID: {partner_id})"
+            partner_name = partner_user.name if partner_user else f"someone i can't find (ID: {partner_id})"
             
             await ctx.send(f"aight, lemme check the books... says here you, {user.mention}, are shackled to **{partner_name}**. happened on **{marriage_date}**. hope you're happy, or whatever.")
         else:
