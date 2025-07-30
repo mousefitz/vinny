@@ -524,6 +524,81 @@ class VinnyBot(commands.Bot):
             sys.stderr.write(f"ERROR: Error retrieving a random memory for user {user_id}: {e}\n")
             return None
 
+    # --- NEW: Marriage Helper Functions ---
+
+    async def save_proposal(self, guild_id: str, proposer_id: str, recipient_id: str):
+        """Saves a marriage proposal to Firestore."""
+        if not self.db: return False
+        try:
+            proposal_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/proposals").document(f"{proposer_id}_to_{recipient_id}")
+            proposal_data = {
+                "proposer_id": proposer_id,
+                "recipient_id": recipient_id,
+                "timestamp": datetime.datetime.now(datetime.UTC)
+            }
+            await self.loop.run_in_executor(None, lambda: proposal_ref.set(proposal_data))
+            return True
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to save proposal: {e}\n")
+            return False
+
+    async def check_proposal(self, guild_id: str, proposer_id: str, recipient_id: str):
+        """Checks for a valid, recent proposal."""
+        if not self.db: return None
+        try:
+            proposal_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/proposals").document(f"{proposer_id}_to_{recipient_id}")
+            doc = await self.loop.run_in_executor(None, proposal_ref.get)
+            if doc.exists:
+                proposal_data = doc.to_dict()
+                proposal_time = proposal_data.get("timestamp")
+                # Proposal is valid for 5 minutes
+                if datetime.datetime.now(datetime.UTC) - proposal_time < datetime.timedelta(minutes=5):
+                    return proposal_data
+            return None
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to check proposal: {e}\n")
+            return None
+
+    async def finalize_marriage(self, guild_id: str, user1_id: str, user2_id: str):
+        """Updates both user profiles to set them as married."""
+        if not self.db: return False
+        try:
+            marriage_date = datetime.datetime.now(datetime.UTC).strftime("%B %d, %Y")
+            # Update user1's profile
+            await self.save_user_profile_fact(user1_id, guild_id, "married_to", user2_id)
+            await self.save_user_profile_fact(user1_id, guild_id, "marriage_date", marriage_date)
+            # Update user2's profile
+            await self.save_user_profile_fact(user2_id, guild_id, "married_to", user1_id)
+            await self.save_user_profile_fact(user2_id, guild_id, "marriage_date", marriage_date)
+            # Clean up the proposal
+            proposal_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/proposals").document(f"{user1_id}_to_{user2_id}")
+            await self.loop.run_in_executor(None, proposal_ref.delete)
+            return True
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to finalize marriage: {e}\n")
+            return False
+
+    async def process_divorce(self, guild_id: str, user1_id: str, user2_id: str):
+        """Removes marriage info from both user profiles."""
+        if not self.db: return False
+        try:
+            # This uses a special FieldValue to delete a field from a document
+            from google.cloud.firestore_v1.field_path import FieldPath
+            from google.cloud.firestore_v1.base_document import DocumentSnapshot
+            
+            # Delete fields for user1
+            profile1_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/user_profiles").document(user1_id)
+            await self.loop.run_in_executor(None, lambda: profile1_ref.update({"married_to": firestore.DELETE_FIELD, "marriage_date": firestore.DELETE_FIELD}))
+            
+            # Delete fields for user2
+            profile2_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/user_profiles").document(user2_id)
+            await self.loop.run_in_executor(None, lambda: profile2_ref.update({"married_to": firestore.DELETE_FIELD, "marriage_date": firestore.DELETE_FIELD}))
+            
+            return True
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to process divorce: {e}\n")
+            return False
+
 if __name__ == "__main__":
     intents = discord.Intents.default()
     intents.message_content = True
