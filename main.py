@@ -328,7 +328,14 @@ class VinnyBot(commands.Bot):
 
     async def extract_facts_from_message(self, user_message: str):
         fact_extraction_prompt = (
-            "You are a highly accurate fact-extraction system... (prompt as before)"
+            "You are a highly accurate fact-extraction system. Your task is to analyze the following user message "
+            "and identify any personal facts, preferences, or descriptions. "
+            "For example, 'my favorite food is pizza' or 'Cori smells like seaweed' or 'I love dogs'. "
+            "If you find any facts, return them as a JSON object with the subject of the fact as the key and the detail as the value. "
+            "The key should be a simple, lowercase string (e.g., 'favorite food', 'smells like'). "
+            "If no facts are found, return an empty JSON object. "
+            "Example output: {\"favorite food\": \"pizza\", \"smells like\": \"seaweed\"}\n\n"
+            f"User message to analyze: \"{user_message}\""
         )
         # ** THE FIX IS HERE **
         # Define safety settings for TEXT ONLY
