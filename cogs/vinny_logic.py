@@ -25,7 +25,7 @@ class VinnyLogic(commands.Cog):
     def cog_unload(self):
         self.memory_scheduler.cancel()
 
-    # --- NEW: HELPER for Image Generation Requests ---
+    # --- HELPER for Image Generation Requests ---
     async def _handle_image_request(self, message: discord.Message, image_prompt: str):
         """Handles a request to paint or draw an image."""
         async with message.channel.typing():
@@ -36,7 +36,6 @@ class VinnyLogic(commands.Cog):
                     f"Generate a very short, in-character phrase (in lowercase with typos) that you would say as you're about to start painting.\n"
                     f"Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and wine', 'aight aight i hear ya...'"
                 )
-                # Use centralized text-only safety settings for the thinking message
                 thinking_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(role='user', parts=[types.Part(text=thinking_prompt)])],
@@ -60,7 +59,6 @@ class VinnyLogic(commands.Cog):
             
             smarter_prompt = image_prompt
             try:
-                # Use centralized text-only safety settings for the prompt rewriter
                 rewritten_prompt_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(role='user', parts=[types.Part(text=prompt_rewriter_instruction)])],
@@ -82,7 +80,6 @@ class VinnyLogic(commands.Cog):
                         f"Generate a short, single-paragraph response to show them your work. Be chaotic, funny, or complain about it, in your typical lowercase, typo-ridden style.\n"
                         f"DO NOT repeat the original prompt '{image_prompt}' in your response."
                     )
-                    # Use centralized text-only safety settings for the final comment
                     comment_response = await self.bot.gemini_client.aio.models.generate_content(
                         model=self.bot.MODEL_NAME, 
                         contents=[types.Content(role='user', parts=[types.Part(text=comment_prompt)])],
@@ -96,24 +93,22 @@ class VinnyLogic(commands.Cog):
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
-    # --- NEW: HELPER for Replies to Messages (including images) ---
+    # --- HELPER for Replies to Messages (including images) ---
     async def _handle_reply(self, message: discord.Message):
         """Handles a direct reply to one of Vinny's or another user's messages."""
         try:
             replied_to_message = await message.channel.fetch_message(message.reference.message_id)
             prompt_parts = []
             
-            # **IMPORTANT**: NO safety settings are applied when an image is involved.
-            # The model needs to "see" the image without restriction.
             if replied_to_message.attachments and "image" in replied_to_message.attachments[0].content_type:
                 attachment = replied_to_message.attachments[0]
                 image_bytes = await attachment.read()
                 prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
                 prompt_parts.append(types.Part(text=(f"The user '{message.author.display_name}' replied with: \"{message.content}\"\nThey are replying to an older message from '{replied_to_message.author.display_name}' which contained the image above and said: \"{replied_to_message.content}\"\n\nYour task is to respond to the IMAGE in the OLDER message.")))
-                config = None # No config = no safety settings
+                config = None
             else:
                 prompt_parts.append(types.Part(text=(f"You are responding to a specific reply. The user '{message.author.display_name}' replied with: \"{message.content}\"\nThey are replying to an older message from '{replied_to_message.author.display_name}' which said: \"{replied_to_message.content}\"\n\nYour task is to respond to the OLDER message's content.")))
-                config = self.bot.GEMINI_TEXT_CONFIG # Use text safety settings for text replies
+                config = self.bot.GEMINI_TEXT_CONFIG
 
             await self.update_vinny_mood()
             dynamic_persona_injection = f"right now, your current mood is '{self.bot.current_mood}'."
@@ -123,30 +118,38 @@ class VinnyLogic(commands.Cog):
                 response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(role='user', parts=final_reply_prompt_parts)],
-                    config=config # Apply the appropriate config (None for images, text for text)
+                    config=config
                 )
                 if response.text and response.text.strip():
                     for chunk in self.bot.split_message(response.text):
                         await message.channel.send(chunk.lower())
                         await asyncio.sleep(random.uniform(1.0, 1.5))
-            return True # Indicate that the reply was handled
+            return True
         except discord.NotFound:
             sys.stderr.write("Warning: Could not find replied-to message.\n")
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to handle reply: {e}\n")
-        return False # Indicate failure
+        return False
 
-    # --- NEW: HELPER for Standard Text/Image Responses ---
-    async def _handle_text_or_image_response(self, message: discord.Message, cleaned_for_triggers: str):
+    # --- REVISED: HELPER for Standard Text/Image Responses ---
+    async def _handle_text_or_image_response(self, message: discord.Message):
         """Handles a standard message that might contain text, an image, or both."""
+        
+        # --- FIX: Trigger Check (on original message content) ---
         response_trigger = None
         bot_names = ["vinny", "vincenzo", "vin vin"]
-        message_content_lower = cleaned_for_triggers.lower()
-        if self.bot.user.mentioned_in(message) or any(name in message_content_lower for name in bot_names): response_trigger = "direct"
-        elif self.bot.autonomous_mode_enabled or message.guild is None: response_trigger = "autonomous_always"
-        elif random.random() < self.bot.autonomous_reply_chance: response_trigger = "autonomous_random"
+        message_content_lower = message.content.lower()
 
-        if not response_trigger: return
+        if self.bot.user.mentioned_in(message) or any(name in message_content_lower for name in bot_names):
+            response_trigger = "direct"
+            sys.stderr.write(f"DEBUG: Direct response triggered by name or mention.\n")
+        elif self.bot.autonomous_mode_enabled or message.guild is None:
+            response_trigger = "autonomous_always"
+        elif random.random() < self.bot.autonomous_reply_chance:
+            response_trigger = "autonomous_random"
+
+        if not response_trigger:
+            return
 
         if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT:
             await message.channel.send("whoa there, pal. vinny's brain is fried.")
@@ -183,15 +186,15 @@ class VinnyLogic(commands.Cog):
                 history.reverse()
                 
                 prompt_parts = [types.Part(text=message.content)]
-                config = self.bot.GEMINI_TEXT_CONFIG # Default to text config
+                config = self.bot.GEMINI_TEXT_CONFIG
                 
                 if message.attachments:
                     for attachment in message.attachments:
                         if attachment.content_type and "image" in attachment.content_type:
                             image_bytes = await attachment.read()
                             prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
-                            config = None # **IMPORTANT**: No safety settings for image viewing
-                            break # Assume one image for now
+                            config = None
+                            break
                 
                 final_instruction_text = (
                     f"# --- YOUR CURRENT CONTEXT AND TASK ---\n"
@@ -202,30 +205,30 @@ class VinnyLogic(commands.Cog):
                 final_prompt_parts = [types.Part(text=final_instruction_text), *prompt_parts]
                 history.append(types.Content(role='user', parts=final_prompt_parts))
                 
-                # --- Grounding & API Call ---
+                # --- FIX: Grounding & API Call (using original message_content_lower) ---
                 tools = []
-                question_words = ["who is", "what is", "where is", "when is", "how is"]
-                if "?" in message.content or any(word in message_content_lower for word in question_words):
+                question_words = ["who is", "what is", "where is", "when is", "how is", "what's", "whats"]
+                if "?" in message_content_lower or any(word in message_content_lower for word in question_words):
                     if self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                         tools = [types.Tool(google_search=types.GoogleSearch())]
                         self.bot.API_CALL_COUNTS["search_grounding"] += 1
-                        sys.stderr.write("DEBUG: Grounding with Google Search enabled.\n")
+                        sys.stderr.write("DEBUG: Grounding with Google Search has been triggered.\n")
                 
-                # If we have tools, we need to add safety settings back to the config object
-                if tools and config is None:
-                    config = types.GenerateContentConfig(tools=tools)
-                elif tools and config is not None:
-                    config.tools=tools
+                if tools:
+                    if config is None:
+                        config = types.GenerateContentConfig(tools=tools)
+                    else:
+                        config.tools = tools
                 
                 self.bot.API_CALL_COUNTS["text_generation"] += 1
                 await self.bot.update_api_count_in_firestore()
 
                 response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
                 
-                # --- Handle Function Calling (if any) ---
                 while response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
                     function_call = response.candidates[0].content.parts[0].function_call
                     if function_call.name == 'Google Search':
+                        sys.stderr.write(f"DEBUG: Executing Google Search function call with args: {function_call.args}\n")
                         tool_response = self.bot.gemini_client.tools.google_search(function_call.args)
                         function_response_part = types.Part(function_response=types.FunctionResponse(name='Google Search', response={'result': tool_response}))
                         history.append(response.candidates[0].content)
@@ -233,7 +236,6 @@ class VinnyLogic(commands.Cog):
                         response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
                     else: break
                 
-                # --- Send Response ---
                 if response.prompt_feedback and response.prompt_feedback.block_reason:
                     sys.stderr.write(f"API call blocked. Reason: {response.prompt_feedback.block_reason.name}")
                     await message.channel.send("whoa there, pal. vinny's brain is fried or somethin'.")
@@ -241,14 +243,8 @@ class VinnyLogic(commands.Cog):
 
                 raw_response_text = response.text
                 if raw_response_text and raw_response_text.strip().lower() != '[silence]':
-                    message_chunks, total_chars_sent, MAX_RESPONSE_CHARS = self.bot.split_message(raw_response_text), 0, 750
-                    for chunk in message_chunks:
-                        if total_chars_sent + len(chunk) > MAX_RESPONSE_CHARS:
-                            remaining_chars = MAX_RESPONSE_CHARS - total_chars_sent
-                            if remaining_chars > 20: await message.channel.send(chunk[:remaining_chars].rsplit(' ', 1)[0] + "...")
-                            break
+                    for chunk in self.bot.split_message(raw_response_text):
                         await message.channel.send(chunk.lower())
-                        total_chars_sent += len(chunk)
                         await asyncio.sleep(random.uniform(1.0, 1.5))
 
                 if self.bot.PASSIVE_LEARNING_ENABLED and not (message.attachments and "image" in message.attachments[0].content_type):
@@ -257,10 +253,9 @@ class VinnyLogic(commands.Cog):
                         for key, value in extracted_facts.items():
                             await self.bot.save_user_profile_fact(user_id, guild_id, key, value)
     
-    # --- MAIN EVENT LISTENER (Refactored) ---
+    # --- REVISED: MAIN EVENT LISTENER (Dispatcher) ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        # 1. Initial Checks: Ignore bots and processed messages
         if message.author.bot or message.id in self.bot.processed_message_ids:
             return
         if message.content.startswith(self.bot.command_prefix):
@@ -268,34 +263,33 @@ class VinnyLogic(commands.Cog):
         self.bot.processed_message_ids[message.id] = True
 
         try:
-            # 2. Handle Direct Replies First
-            bot_names = ["vinny", "vincenzo", "vin vin"]
-            is_reply = message.reference and (self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names))
-            if is_reply:
+            # 1. Handle Direct Replies First
+            if message.reference and self.bot.user.mentioned_in(message):
                 if await self._handle_reply(message):
-                    return # Stop processing if reply was handled
+                    return
 
             await self.update_vinny_mood()
             
-            # 3. Clean message content for trigger checks
+            # 2. Clean message content specifically for action triggers
             message_content_lower = message.content.lower()
-            cleaned_for_triggers = message_content_lower.replace(f'<@!{self.bot.user.id}>', '').replace(f'<@{self.bot.user.id}>', '').strip()
+            bot_names = ["vinny", "vincenzo", "vin vin"]
+            cleaned_for_actions = message_content_lower.replace(f'<@!{self.bot.user.id}>', '').replace(f'<@{self.bot.user.id}>', '').strip()
             for name in bot_names:
-                if cleaned_for_triggers.startswith(name):
-                    cleaned_for_triggers = cleaned_for_triggers[len(name):].strip(" ,:;")
+                if cleaned_for_actions.startswith(name):
+                    cleaned_for_actions = cleaned_for_actions[len(name):].strip(" ,:;")
                     break
             
-            # 4. Check for specific action triggers
+            # 3. Check for specific, non-conversational action triggers
             image_trigger_keywords = ["paint", "draw", "make a picture of", "create an image of", "generate an image of"]
             for keyword in image_trigger_keywords:
-                if cleaned_for_triggers.startswith(keyword):
-                    await self._handle_image_request(message, cleaned_for_triggers[len(keyword):].strip())
+                if cleaned_for_actions.startswith(keyword):
+                    await self._handle_image_request(message, cleaned_for_actions[len(keyword):].strip())
                     return
 
             tag_trigger_keywords = ["tag", "mention", "ping"]
             for keyword in tag_trigger_keywords:
-                if cleaned_for_triggers.startswith(keyword):
-                    await self.find_and_tag_member(message, cleaned_for_triggers[len(keyword):].strip())
+                if cleaned_for_actions.startswith(keyword):
+                    await self.find_and_tag_member(message, cleaned_for_actions[len(keyword):].strip())
                     return
 
             name_recall_triggers = ["what's my name", "what is my name", "do you know my name", "tell me my name"]
@@ -307,7 +301,7 @@ class VinnyLogic(commands.Cog):
 
             name_patterns = [r"my name is\s+([A-Z][a-z]{2,})", r"call me\s+([A-Z][a-z]{2,})", r"you can call me\s+([A-Z][a-z]{2,})", r"i'm\s+([A-Z][a-z]{2,})", r"i am\s+([A-Z][a-z]{2,})"]
             for pattern in name_patterns:
-                match = re.search(pattern, message.content)
+                match = re.search(pattern, message.content, re.IGNORECASE)
                 if match:
                     nickname = match.group(1)
                     if nickname.lower() not in ['vinny', 'vincenzo', 'vin']:
@@ -317,7 +311,7 @@ class VinnyLogic(commands.Cog):
                             await message.channel.send("my head's spinnin'. tried to remember that.")
                         return
 
-            # 5. Handle random reactions
+            # 4. Handle random reactions
             explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
             if "pie" in message_content_lower and random.random() < 0.75:
                 await message.add_reaction('🥧')
@@ -329,11 +323,13 @@ class VinnyLogic(commands.Cog):
                 except Exception as e:
                     sys.stderr.write(f"ERROR: Failed to add reaction: {e}\n")
 
-            # 6. Fallback to general text/image response
-            await self._handle_text_or_image_response(message, cleaned_for_triggers)
+            # 5. Fallback to the general conversational response handler
+            await self._handle_text_or_image_response(message)
 
         except Exception as e:
             sys.stderr.write(f"CRITICAL ERROR in on_message: {type(e).__name__}: {e}\n")
+            import traceback
+            traceback.print_exc()
             await message.channel.send("oops! vinny's brain got a little fuzzy...")
 
     # --- Other Functions (Unchanged) ---
