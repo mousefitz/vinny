@@ -454,12 +454,23 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="!marry [@user]", value="Accept a proposal from someone who just proposed to you.", inline=False)
         embed.add_field(name="!divorce", value="End your current marriage. Ouch.", inline=False)
         embed.add_field(name="!ballandchain", value="Checks who you're hitched to. If you have to ask, it might be bad news.", inline=False)
+        embed.add_field(name="!vinnycalls [@user] [name]", value="Gives someone a nickname that I'll remember.\n*Example: `!vinnycalls @SomeUser Cori`*", inline=False)
         if await self.bot.is_owner(ctx.author):
             embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
             embed.add_field(name="!set_relationship [@user] [type]", value="**(Owner Only)** Sets my feelings about someone. Types are: `friends`, `rivals`, `distrusted`, `admired`, `annoyance`, `neutral`.", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
         embed.set_footer(text="Now stop botherin' me. Salute!")
         await ctx.send(embed=embed)
+
+# --- NEW: Nickname Command ---
+    @commands.command(name='vinnycalls')
+    async def vinnycalls_command(self, ctx, member: discord.Member, nickname: str):
+        """Teaches Vinny what to call a specific user."""
+        success = await self.bot.save_user_nickname(str(member.id), nickname)
+        if success:
+            await ctx.send(f"aight, got it. from now on, i'm callin' {member.mention} '{nickname}'. salute!")
+        else:
+            await ctx.send("my head's all fuzzy. couldn't remember that name.")
 
     # --- NEW: Marriage Commands ---
 
@@ -603,18 +614,24 @@ class VinnyLogic(commands.Cog):
         
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
-        """Lets users teach Vinny facts about them using natural language."""
-        user_id = str(ctx.author.id)
+        """Lets users teach Vinny facts about themselves or other users."""
         guild_id = str(ctx.guild.id) if ctx.guild else None
+        target_user = ctx.author # Default to the person who sent the message
+
+        # Check if another user was mentioned in the command
+        if ctx.message.mentions:
+            target_user = ctx.message.mentions[0]
+            # Clean the mention out of the string so it doesn't confuse the AI
+            knowledge_string = knowledge_string.replace(f'<@{target_user.id}>', '').strip()
+
+        user_id = str(target_user.id)
         
-        # Use the bot's AI to understand the sentence instead of a rigid pattern
         extracted_facts = await self.bot.extract_facts_from_message(knowledge_string)
 
         if not extracted_facts:
             await ctx.send("eh? what're you tryin' to tell me? i didn't get that. try sayin' it like 'my favorite food is pizza'.")
             return
 
-        # Loop through all facts found and save them
         saved_facts = []
         for key, value in extracted_facts.items():
             success = await self.bot.save_user_profile_fact(user_id, guild_id, key, value)
@@ -623,7 +640,8 @@ class VinnyLogic(commands.Cog):
 
         if saved_facts:
             facts_confirmation = ", ".join(saved_facts)
-            await ctx.send(f"aight, i got it. so {facts_confirmation}. vinny will... probably remember that. maybe.")
+            target_name = "your" if target_user == ctx.author else f"{target_user.display_name}'s"
+            await ctx.send(f"aight, i got it. so {target_name} {facts_confirmation}. vinny will... probably remember that. maybe.")
         else:
             await ctx.send("my head's all fuzzy. tried to remember that but it slipped away.")
 
