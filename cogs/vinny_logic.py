@@ -265,12 +265,28 @@ class VinnyLogic(commands.Cog):
     async def weather_command(self, ctx, *, location: str):
         async with ctx.typing():
             coords = await self.bot.geocode_location(location)
-            if not coords: return await ctx.send(f"couldn't find '{location}'.")
-            weather = await self.bot.get_weather_data(coords['lat'], coords['lon'])
-        if not weather: return await ctx.send("weather report is garbled.")
-        embed = discord.Embed(title=f"{self.bot.get_weather_emoji(weather['weather'][0]['main'])} Weather in {coords['name']}", color=discord.Color.blue())
-        embed.add_field(name="🌡️ Temp", value=f"{weather['main']['temp']}°F")
-        await ctx.send(embed=embed)
+            if not coords:
+                await ctx.send(f"eh, couldn't find that place '{location}'. you sure that's a real place?")
+                return
+            weather_data = await self.bot.get_weather_data(coords['lat'], coords['lon'])
+        if not weather_data or weather_data.get("cod") != 200:
+            await ctx.send("found the place but the damn weather report is all garbled.")
+            return
+        try:
+            city_name = coords.get("name", weather_data.get("name", "Unknown Location"))
+            main_weather = weather_data["weather"][0]
+            embed = discord.Embed(title=f"{self.bot.get_weather_emoji(main_weather['main'])} Weather in {city_name}", description=f"**{main_weather.get('description', '').title()}**", color=discord.Color.blue())
+            embed.add_field(name="🌡️ Temperature", value=f"{weather_data['main'].get('temp')}°F", inline=True)
+            embed.add_field(name="🤔 Feels Like", value=f"{weather_data['main'].get('feels_like')}°F", inline=True)
+            embed.add_field(name="💧 Humidity", value=f"{weather_data['main'].get('humidity')}%", inline=True)
+            embed.add_field(name="💨 Wind", value=f"{weather_data['wind'].get('speed')} mph", inline=True)
+            embed.add_field(name="📡 Live Radar", value=f"[Click to View](https://www.windy.com/{coords['lat']}/{coords['lon']})", inline=False)
+            embed.set_footer(text="don't blame me if the sky starts lyin'. salute!")
+            embed.timestamp = datetime.datetime.now(datetime.UTC)
+            await ctx.send(embed=embed)
+        except Exception as e:
+            sys.stderr.write(f"ERROR: creating weather embed: {e}\n")
+            await ctx.send("somethin' went wrong with the damn weather machine.")
         
 # vinny knows command
 
