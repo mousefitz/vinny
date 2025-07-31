@@ -291,14 +291,35 @@ class VinnyBot(commands.Bot):
         elif "mist" in weather_main or "fog" in weather_main or "haze" in weather_main: return "🌫️"
         else: return "🌎"
 
+    # vinny/main.py
+
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
-        if not self.db: return False
+        if not self.db: 
+            sys.stderr.write("ERROR: Firestore database not initialized. Cannot save fact.\n")
+            return False
+            
         key = key.lower().replace(' ', '_')
         path = f"artifacts/{self.APP_ID}/servers/{guild_id}/user_profiles" if guild_id else f"artifacts/{self.APP_ID}/global_user_profiles"
+        data_to_save = {key: value}
+
+        sys.stderr.write(f"DEBUG: Attempting to save to Firestore. Path: '{path}', UserID: '{user_id}', Data: {data_to_save}\n")
+
         try:
-            await self.loop.run_in_executor(None, self.db.collection(path).document(user_id).set, {key: value}, merge=True)
+            profile_ref = self.db.collection(path).document(user_id)
+            await self.loop.run_in_executor(None, profile_ref.set, data_to_save, merge=True)
+            sys.stderr.write("DEBUG: Firestore save successful.\n")
             return True
-        except Exception as e: return False
+        except Exception as e:
+            # This will print the exact, detailed error to your Render logs
+            sys.stderr.write(f"CRITICAL SAVE FAILURE: An exception occurred while saving to Firestore.\n")
+            sys.stderr.write(f"--> Path: {path}\n")
+            sys.stderr.write(f"--> UserID: {user_id}\n")
+            sys.stderr.write(f"--> Data: {data_to_save}\n")
+            sys.stderr.write(f"--> Exception Type: {type(e).__name__}\n")
+            sys.stderr.write(f"--> Exception Details: {e}\n")
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            return False
 
     async def get_user_profile(self, user_id: str, guild_id: str | None):
         if not self.db: return {}
