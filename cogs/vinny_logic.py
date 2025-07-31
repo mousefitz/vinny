@@ -79,6 +79,7 @@ class VinnyLogic(commands.Cog):
                         await message.channel.send(chunk.lower())
         except Exception as e: pass
 
+#fix#
     async def _handle_text_or_image_response(self, message: discord.Message):
         if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
