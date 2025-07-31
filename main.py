@@ -26,34 +26,35 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # --- Standalone Helper Function to avoid 'self' confusion ---
+# vinny/main.py
+
 async def extract_facts_from_message(bot_instance, user_message: str):
     """
     Analyzes a user message to extract personal facts using the bot's Gemini client.
     This is now a standalone function to prevent 'self' scope issues.
     """
     fact_extraction_prompt = (
-        "You are a highly accurate fact-extraction system. Your task is to analyze a user message "
+        "You are a highly accurate and semantic fact-extraction system. Your task is to analyze a user message "
         "and identify any personal facts, preferences, or descriptions. Your output must be a valid JSON object.\n\n"
         "## Rules:\n"
-        "1.  **Identify the Subject:** The subject can be a name with any characters (e.g., 'Cori', '⋆˚☆⋆｡𖦹°‧★｡⋆') or a pronoun (e.g., 'I', 'my').\n"
-        "2.  **Determine the Key:** The key for the JSON object is the *attribute* or *verb* of the fact (e.g., 'smells like', 'favorite color', 'loves', 'misses'). The subject is NEVER part of the key.\n"
-        "3.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective. Use 'they' or 'their'.\n"
-        "4.  **Return JSON:** If facts are found, return them in a JSON object. If no facts are found, return an empty JSON object: {}.\n\n"
+        "1.  **Identify the Subject:** The subject can be a name or a pronoun. The subject is NEVER part of the key.\n"
+        "2.  **Determine the Key:** The key for the JSON object should be a descriptive noun or attribute (e.g., 'pet', 'favorite color', 'hometown'). AVOID using generic verbs like 'has', 'is', or 'are' as the key when a better noun is available.\n"
+        "3.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective.\n"
+        "4.  **Return JSON:** If no facts are found, return an empty JSON object: {}.\n\n"
         "## Examples:\n"
         "-   **Input:** '⋆˚☆⋆｡𖦹°‧★｡⋆ smells like seaweed'\n"
-        "-   **Analysis:** Subject has special characters. Key is 'smells like'. Value is 'seaweed'.\n"
         "-   **Output:** {\"smells like\": \"seaweed\"}\n\n"
+        "-   **Input:** 'I have a cat named chumba'\n"
+        "-   **Analysis:** Subject is 'I'. The verb is 'have', but a better, more descriptive key is the noun 'pet'.\n"
+        "-   **Output:** {\"pet\": \"a cat named chumba\"}\n\n"
         "-   **Input:** 'I miss my little brother'\n"
-        "-   **Analysis:** Subject is a pronoun. Key is 'misses'. Value becomes 'their little brother' (gender-neutral).\n"
         "-   **Output:** {\"misses\": \"their little brother\"}\n\n"
         "-   **Input:** 'my favorite color is blue'\n"
-        "-   **Analysis:** Subject is a pronoun. Key is 'favorite color'. Value is 'blue'.\n"
         "-   **Output:** {\"favorite color\": \"blue\"}\n\n"
         "## User Message to Analyze:\n"
         f"\"{user_message}\""
     )
     try:
-        # We now correctly use the passed-in bot_instance
         response = await bot_instance.gemini_client.aio.models.generate_content(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])],
@@ -67,7 +68,6 @@ async def extract_facts_from_message(bot_instance, user_message: str):
     except Exception as e:
         sys.stderr.write(f"ERROR: Fact extraction from message failed: {e}\n")
     return None
-
 
 class VinnyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
