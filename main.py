@@ -25,7 +25,7 @@ from cachetools import TTLCache
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# --- NEW: Standalone Helper Function to avoid 'self' confusion ---
+# --- Standalone Helper Function to avoid 'self' confusion ---
 async def extract_facts_from_message(bot_instance, user_message: str):
     """
     Analyzes a user message to extract personal facts using the bot's Gemini client.
@@ -41,15 +41,19 @@ async def extract_facts_from_message(bot_instance, user_message: str):
         "4.  **Return JSON:** If facts are found, return them in a JSON object. If no facts are found, return an empty JSON object: {}.\n\n"
         "## Examples:\n"
         "-   **Input:** '⋆˚☆⋆｡𖦹°‧★｡⋆ smells like seaweed'\n"
+        "-   **Analysis:** Subject has special characters. Key is 'smells like'. Value is 'seaweed'.\n"
         "-   **Output:** {\"smells like\": \"seaweed\"}\n\n"
         "-   **Input:** 'I miss my little brother'\n"
+        "-   **Analysis:** Subject is a pronoun. Key is 'misses'. Value becomes 'their little brother' (gender-neutral).\n"
         "-   **Output:** {\"misses\": \"their little brother\"}\n\n"
         "-   **Input:** 'my favorite color is blue'\n"
+        "-   **Analysis:** Subject is a pronoun. Key is 'favorite color'. Value is 'blue'.\n"
         "-   **Output:** {\"favorite color\": \"blue\"}\n\n"
         "## User Message to Analyze:\n"
         f"\"{user_message}\""
     )
     try:
+        # We now correctly use the passed-in bot_instance
         response = await bot_instance.gemini_client.aio.models.generate_content(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])],
@@ -64,10 +68,12 @@ async def extract_facts_from_message(bot_instance, user_message: str):
         sys.stderr.write(f"ERROR: Fact extraction from message failed: {e}\n")
     return None
 
+
 class VinnyBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # ... (rest of the __init__ function is unchanged)
+
+        # --- Load Configuration ---
         self.DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
         self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
         self.GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
@@ -75,14 +81,18 @@ class VinnyBot(commands.Bot):
         self.FIREBASE_B64 = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_BASE64')
         self.APP_ID = os.getenv('__app_id', 'default-app-id')
 
+        # --- Validate Configuration ---
         if not self.DISCORD_BOT_TOKEN or not self.GEMINI_API_KEY:
             sys.exit("Error: Essential environment variables (DISCORD_BOT_TOKEN, GEMINI_API_KEY) are not set.")
 
+        # --- Initialize API Clients ---
         print("Initializing API clients...")
         self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
         self.http_session = None
         self.db = None
+        self.current_user_id = None 
 
+        # --- Load Personality ---
         try:
             with open('personality.txt', 'r', encoding='utf-8') as f:
                 self.personality_instruction = f.read()
@@ -90,11 +100,13 @@ class VinnyBot(commands.Bot):
         except FileNotFoundError:
             sys.exit("Error: personality.txt not found. Please create it.")
 
+        # --- Bot State & Globals ---
         self.MODEL_NAME = "gemini-2.5-flash"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 10
         
+        # --- Persona & Autonomous Mode ---
         self.MOODS = ["cranky", "depressed", "artistic", "cheerful", "drunkenly profound", "suspicious", "flirty"]
         self.current_mood = random.choice(self.MOODS)
         self.last_mood_change_time = datetime.datetime.now()
@@ -104,6 +116,7 @@ class VinnyBot(commands.Bot):
         self.autonomous_reply_chance = 0.05
         self.reaction_chance = 0.15
         
+        # --- Centralized Safety Settings for Text Generation ---
         self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY = [
             types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
             for cat in [
@@ -115,15 +128,23 @@ class VinnyBot(commands.Bot):
         ]
         self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
         
+        # --- Rate Limiting ---
         self.TEXT_GENERATION_LIMIT = 1490
         self.SEARCH_GROUNDING_LIMIT = 490
-        self.API_CALL_COUNTS = {"date": str(datetime.date.today()), "text_generation": 0, "search_grounding": 0}
+        self.API_CALL_COUNTS = {
+            "date": str(datetime.date.today()),
+            "text_generation": 0,
+            "search_grounding": 0,
+        }
 
     async def setup_hook(self):
+        """This is called once when the bot logs in."""
         self.http_session = aiohttp.ClientSession()
+        
         await self.initialize_firebase()
         if self.db:
             await self.initialize_rate_limiter()
+
         print("Loading cogs...")
         await self.load_extension("cogs.vinny_logic")
         print("Cogs loaded successfully.")
@@ -133,17 +154,20 @@ class VinnyBot(commands.Bot):
         print('------')
 
     async def process_commands(self, message):
+        """This function processes commands."""
         ctx = await self.get_context(message, cls=commands.Context)
         if ctx.command:
             await self.invoke(ctx)
             
     async def on_error(self, event, *args, **kwargs):
+        """Catch unhandled errors."""
         _, exc, _ = sys.exc_info()
         sys.stderr.write(f"Unhandled error in {event}: {exc}\n")
         import traceback
         traceback.print_exc()
 
     async def close(self):
+        """Called when the bot is shutting down."""
         await super().close()
         if self.http_session:
             await self.http_session.close()
@@ -167,10 +191,6 @@ class VinnyBot(commands.Bot):
             print(f"Error initializing Firebase: {e}")
             self.db = None
             return False
-    
-    # ... (the rest of the main.py file is unchanged)
-    # The key change is that extract_facts_from_message is no longer a method here.
-    # We will copy over the rest of the functions from the previous correct version.
 
     async def generate_image_with_imagen(self, prompt: str) -> io.BytesIO | None:
         if not self.GCP_PROJECT_ID or not self.FIREBASE_B64: return None

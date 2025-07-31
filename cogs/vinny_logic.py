@@ -27,10 +27,9 @@ class VinnyLogic(commands.Cog):
 
     def cog_unload(self):
         self.memory_scheduler.cancel()
-    
-    # ... (all helper functions like _handle_image_request, _handle_reply, etc. are unchanged)
-    # The only change is to the vinnyknows_command and help_command
+
     async def _handle_image_request(self, message: discord.Message, image_prompt: str):
+        """Handles a request to paint or draw an image."""
         async with message.channel.typing():
             thinking_message = "aight, lemme get my brushes..."
             try:
@@ -191,10 +190,26 @@ class VinnyLogic(commands.Cog):
 
     @commands.command(name='help')
     async def help_command(self, ctx):
-        embed = discord.Embed(title="What do ya want?", description="Here's the stuff I can do.", color=discord.Color.dark_gold())
-        embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you.", inline=False)
-        embed.add_field(name="!forgetme", value="Makes me forget what I know about you in this server.", inline=False)
-        # ... Add other commands
+        embed = discord.Embed(
+            title="What do ya want?",
+            description="Heh. Aight, so you need help? Pathetic. Here's the stuff I can do if ya use the '!' thing. Don't get used to it.",
+            color=discord.Color.dark_gold()
+        )
+        embed.add_field(name="!remember [text]", value="Tells me to remember somethin'. I'll probably forget.\n*Example: `!remember my dog is named fido`*", inline=False)
+        embed.add_field(name="!recall [topic]", value="Tries to remember somethin' we talked about *in this specific place*.\n*Example: `!recall fido`*", inline=False)
+        embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
+        embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
+        embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
+        embed.add_field(name="!propose [@user]", value="Get down on one knee and propose to someone special.", inline=False)
+        embed.add_field(name="!marry [@user]", value="Accept a proposal from someone who just proposed to you.", inline=False)
+        embed.add_field(name="!divorce", value="End your current marriage. Ouch.", inline=False)
+        embed.add_field(name="!ballandchain", value="Checks who you're hitched to. If you have to ask, it might be bad news.", inline=False)
+        embed.add_field(name="!vinnycalls [@user] [name]", value="Gives someone a nickname that I'll remember.\n*Example: `!vinnycalls @SomeUser Cori`*", inline=False)
+        if await self.bot.is_owner(ctx.author):
+            embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
+            embed.add_field(name="!set_relationship [@user] [type]", value="**(Owner Only)** Sets my feelings about someone. Types are: `friends`, `rivals`, `distrusted`, `admired`, `annoyance`, `neutral`.", inline=False)
+            embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
+        embed.set_footer(text="Now stop botherin' me. Salute!")
         await ctx.send(embed=embed)
 
     @commands.command(name='vinnycalls')
@@ -267,7 +282,6 @@ class VinnyLogic(commands.Cog):
             target_user = ctx.message.mentions[0]
             knowledge_string = re.sub(f'<@!?{target_user.id}>', target_user.display_name, knowledge_string).strip()
         
-        # --- FIX: Call the standalone function and add better logging ---
         extracted_facts = await extract_facts_from_message(self.bot, knowledge_string)
         
         if not extracted_facts:
