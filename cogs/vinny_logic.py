@@ -448,7 +448,7 @@ class VinnyLogic(commands.Cog):
         )
         embed.add_field(name="!remember [text]", value="Tells me to remember somethin'. I'll probably forget.\n*Example: `!remember my dog is named fido`*", inline=False)
         embed.add_field(name="!recall [topic]", value="Tries to remember somethin' we talked about *in this specific place*.\n*Example: `!recall fido`*", inline=False)
-        embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you, like `my [key] is [value]`.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
+        embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
         embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
         embed.add_field(name="!propose [@user]", value="Get down on one knee and propose to someone special.", inline=False)
         embed.add_field(name="!marry [@user]", value="Accept a proposal from someone who just proposed to you.", inline=False)

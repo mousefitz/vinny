@@ -10,6 +10,7 @@ import aiohttp
 import base64
 import io
 import random
+from zoneinfo import ZoneInfo
 
 # Use python-dotenv for local development to load from a .env file
 from dotenv import load_dotenv
@@ -564,7 +565,9 @@ class VinnyBot(commands.Bot):
         """Updates both user global profiles to set them as married."""
         if not self.db: return False
         try:
-            marriage_date = datetime.datetime.now(datetime.UTC).strftime("%B %d, %Y")
+            utc_now = datetime.datetime.now(datetime.UTC)
+            local_now = utc_now.astimezone(ZoneInfo("America/New_York"))
+            marriage_date = local_now.strftime("%B %d, %Y")
             # We now save to the global user profile (guild_id is None)
             await self.save_user_profile_fact(user1_id, None, "married_to", user2_id)
             await self.save_user_profile_fact(user1_id, None, "marriage_date", marriage_date)
