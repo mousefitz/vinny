@@ -73,6 +73,18 @@ class VinnyBot(commands.Bot):
         self.autonomous_reply_chance = 0.05
         self.reaction_chance = 0.15
         
+        # --- NEW: Centralized Safety Settings for Text Generation ---
+        self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY = [
+            types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+            for cat in [
+                types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT
+            ]
+        ]
+        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
+        
         # --- Rate Limiting ---
         self.TEXT_GENERATION_LIMIT = 1490
         self.SEARCH_GROUNDING_LIMIT = 490
@@ -337,16 +349,12 @@ class VinnyBot(commands.Bot):
             "Example output: {\"favorite food\": \"pizza\", \"smells like\": \"seaweed\"}\n\n"
             f"User message to analyze: \"{user_message}\""
         )
-        # ** THE FIX IS HERE **
-        # Define safety settings for TEXT ONLY
-        text_safety_settings = [
-            types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
-            for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
-        ]
-        config = types.GenerateContentConfig(safety_settings=text_safety_settings)
         try:
+            # Use the centralized text-only safety settings
             response = await self.gemini_client.aio.models.generate_content(
-                model=self.MODEL_NAME, contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])], config=config
+                model=self.MODEL_NAME, 
+                contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])], 
+                config=self.GEMINI_TEXT_CONFIG
             )
             raw_text = response.text.strip()
             json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
@@ -424,15 +432,12 @@ class VinnyBot(commands.Bot):
                         types.Content(role='model', parts=[types.Part(text="aight, i get it. i'll summarize the slop.")]),
                         types.Content(role='user', parts=[types.Part(text=summary_prompt)])]
             
-            # ** THE FIX IS HERE **
-            # Define safety settings for TEXT ONLY
-            text_safety_settings = [
-                types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
-                for cat in [types.HarmCategory.HARM_CATEGORY_HARASSMENT, types.HarmCategory.HARM_CATEGORY_HATE_SPEECH, types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT]
-            ]
-            config = types.GenerateContentConfig(safety_settings=text_safety_settings)
-            
-            response = await self.gemini_client.aio.models.generate_content(model=self.MODEL_NAME, contents=contents, config=config)
+            # Use the centralized text-only safety settings
+            response = await self.gemini_client.aio.models.generate_content(
+                model=self.MODEL_NAME, 
+                contents=contents, 
+                config=self.GEMINI_TEXT_CONFIG
+            )
             
             if response.candidates and response.candidates[0].content.parts:
                 raw_summary = response.candidates[0].content.parts[0].text
