@@ -87,7 +87,11 @@ class VinnyLogic(commands.Cog):
                 user_profile = await self.bot.get_user_profile(user_id, guild_id) or {}
                 profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
                 
-                history = [types.Content(parts=[types.Part(text=self.bot.personality_instruction)])]
+                # FIX: Initialize the history with a user role for the prompt and a model role for the acknowledgment
+                history = [
+                    types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
+                    types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
+                ]
                 async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH):
                     if msg.id == message.id: continue
                     history.append(types.Content(role="model" if msg.author == self.bot.user else "user", parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]))
