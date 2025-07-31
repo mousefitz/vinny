@@ -602,12 +602,19 @@ class VinnyLogic(commands.Cog):
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
         """Lets users teach Vinny facts about themselves or other users."""
         guild_id = str(ctx.guild.id) if ctx.guild else None
-        target_user = ctx.author 
+        target_user = ctx.author
+
+        # --- FIX: Reconstruct the sentence instead of deleting the mention ---
         if ctx.message.mentions:
             target_user = ctx.message.mentions[0]
-            knowledge_string = knowledge_string.replace(f'<@{target_user.id}>', '').strip()
+            # Replace all possible mention formats with the user's plain display name
+            # This turns "@User smells like..." into "User smells like..."
+            mention_pattern = re.compile(f'<@!?{target_user.id}>')
+            knowledge_string = mention_pattern.sub(target_user.display_name, knowledge_string).strip()
+
         user_id = str(target_user.id)
         
+        # Now, pass the complete sentence to the fact extractor
         extracted_facts = await self.bot.extract_facts_from_message(knowledge_string)
 
         if not extracted_facts:

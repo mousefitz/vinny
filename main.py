@@ -339,15 +339,27 @@ class VinnyBot(commands.Bot):
             return None
 
     async def extract_facts_from_message(self, user_message: str):
+        # --- FIX: A much smarter and more detailed prompt for the AI ---
         fact_extraction_prompt = (
             "You are a highly accurate fact-extraction system. Your task is to analyze the following user message "
-            "and identify any personal facts, preferences, or descriptions. "
-            "For example, 'my favorite food is pizza' or 'Cori smells like seaweed' or 'I love dogs'. "
-            "If you find any facts, return them as a JSON object with the subject of the fact as the key and the detail as the value. "
-            "The key should be a simple, lowercase string (e.g., 'favorite food', 'smells like'). "
-            "If no facts are found, return an empty JSON object. "
-            "Example output: {\"favorite food\": \"pizza\", \"smells like\": \"seaweed\"}\n\n"
-            f"User message to analyze: \"{user_message}\""
+            "and identify any personal facts, preferences, or descriptions. Your output must be a JSON object.\n\n"
+            "## Rules:\n"
+            "1. Identify the subject of the sentence (e.g., 'Cori', 'my favorite food', 'I'). The subject is NEVER part of the fact's key.\n"
+            "2. The key of the JSON object should be the attribute or verb of the fact (e.g., 'smells like', 'favorite color', 'loves').\n"
+            "3. The value should be the detail of the fact.\n"
+            "4. If no facts are found, return an empty JSON object: {}.\n\n"
+            "## Examples:\n"
+            "- Input: 'Cori smells like seaweed and baked beans'\n"
+            "- Analysis: Subject='Cori', Key='smells like', Value='seaweed and baked beans'\n"
+            "- Output: {\"smells like\": \"seaweed and baked beans\"}\n\n"
+            "- Input: 'my favorite color is blue'\n"
+            "- Analysis: Subject='my favorite color', Key='favorite color', Value='blue'\n"
+            "- Output: {\"favorite color\": \"blue\"}\n\n"
+            "- Input: 'i love dogs'\n"
+            "- Analysis: Subject='i', Key='loves', Value='dogs'\n"
+            "- Output: {\"loves\": \"dogs\"}\n\n"
+            "## User Message to Analyze:\n"
+            f"\"{user_message}\""
         )
         try:
             # Use the centralized text-only safety settings
@@ -357,9 +369,11 @@ class VinnyBot(commands.Bot):
                 config=self.GEMINI_TEXT_CONFIG
             )
             raw_text = response.text.strip()
-            json_match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+            # A more robust regex to find JSON within ```json ``` blocks or just raw
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', raw_text, re.DOTALL)
             if json_match:
-                json_string = json_match.group(0)
+                # Prioritize the content of the json block if it exists, otherwise take the raw json
+                json_string = json_match.group(1) or json_match.group(2)
                 return json.loads(json_string)
         except Exception as e:
             sys.stderr.write(f"ERROR: Fact extraction from message failed: {e}\n")
