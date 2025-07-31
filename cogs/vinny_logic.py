@@ -294,18 +294,21 @@ class VinnyLogic(commands.Cog):
                 saved_facts.append(f"'{key}' is '{value}'")
 
         if saved_facts:
-            # --- NEW: Generate a dynamic, in-character response ---
+            # --- NEW: A much smarter prompt that forces the AI to be context-aware ---
             facts_confirmation = ", ".join(saved_facts)
             target_name = "themselves" if target_user == ctx.author else target_user.display_name
             
             confirmation_prompt = (
                 f"{self.bot.personality_instruction}\n\n"
                 f"# --- YOUR TASK ---\n"
-                f"A user just successfully taught you a fact. Your task is to confirm that you've learned it, but in your own chaotic, reluctant, or flirty way. Obey all your personality directives.\n"
-                f"- The user who taught you: {ctx.author.display_name}\n"
-                f"- The fact is about: {target_name}\n"
-                f"- The fact you learned: {facts_confirmation}\n\n"
-                f"Generate a short, lowercase, typo-ridden confirmation. Make sure to acknowledge the fact you learned."
+                f"A user just taught you a fact. Your task is to confirm that you've learned it in your own chaotic, reluctant, or flirty way. Obey all your personality directives.\n\n"
+                f"## CONTEXT:\n"
+                f"- **The Teacher:** '{ctx.author.display_name}'\n"
+                f"- **The Subject of the Fact:** '{target_name}'\n"
+                f"- **The Fact Itself:** {facts_confirmation}\n\n"
+                f"## INSTRUCTIONS:\n"
+                f"1.  First, combine the **Subject** and the **Fact** into a complete thought (e.g., 'enraged smells like poo').\n"
+                f"2.  Then, generate a short, lowercase, typo-ridden confirmation that shows you understand this complete thought. Acknowledge that **The Teacher** taught you this."
             )
             
             try:
