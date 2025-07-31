@@ -339,40 +339,37 @@ class VinnyBot(commands.Bot):
             return None
 
     async def extract_facts_from_message(self, user_message: str):
-        # --- FIX: A much smarter and more detailed prompt for the AI ---
+        # --- FINAL, MOST ROBUST PROMPT ---
         fact_extraction_prompt = (
-            "You are a highly accurate fact-extraction system. Your task is to analyze the following user message "
-            "and identify any personal facts, preferences, or descriptions. Your output must be a JSON object.\n\n"
+            "You are a highly accurate fact-extraction system. Your task is to analyze a user message "
+            "and identify any personal facts, preferences, or descriptions. Your output must be a valid JSON object.\n\n"
             "## Rules:\n"
-            "1. Identify the subject of the sentence (e.g., 'Cori', 'my favorite food', 'I'). The subject is NEVER part of the fact's key.\n"
-            "2. The key of the JSON object should be the attribute or verb of the fact (e.g., 'smells like', 'favorite color', 'loves').\n"
-            "3. The value should be the detail of the fact.\n"
-            "4. If no facts are found, return an empty JSON object: {}.\n\n"
+            "1.  **Identify the Subject:** The subject can be a name with any characters (e.g., 'Cori', '⋆˚☆⋆｡𖦹°‧★｡⋆') or a pronoun (e.g., 'I', 'my').\n"
+            "2.  **Determine the Key:** The key for the JSON object is the *attribute* or *verb* of the fact (e.g., 'smells like', 'favorite color', 'loves', 'misses'). The subject is NEVER part of the key.\n"
+            "3.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective. Use 'they' or 'their'.\n"
+            "4.  **Return JSON:** If facts are found, return them in a JSON object. If no facts are found, return an empty JSON object: {}.\n\n"
             "## Examples:\n"
-            "- Input: 'Cori smells like seaweed and baked beans'\n"
-            "- Analysis: Subject='Cori', Key='smells like', Value='seaweed and baked beans'\n"
-            "- Output: {\"smells like\": \"seaweed and baked beans\"}\n\n"
-            "- Input: 'my favorite color is blue'\n"
-            "- Analysis: Subject='my favorite color', Key='favorite color', Value='blue'\n"
-            "- Output: {\"favorite color\": \"blue\"}\n\n"
-            "- Input: 'i love dogs'\n"
-            "- Analysis: Subject='i', Key='loves', Value='dogs'\n"
-            "- Output: {\"loves\": \"dogs\"}\n\n"
+            "-   **Input:** '⋆˚☆⋆｡𖦹°‧★｡⋆ smells like seaweed'\n"
+            "-   **Analysis:** Subject has special characters. Key is 'smells like'. Value is 'seaweed'.\n"
+            "-   **Output:** {\"smells like\": \"seaweed\"}\n\n"
+            "-   **Input:** 'I miss my little brother'\n"
+            "-   **Analysis:** Subject is a pronoun. Key is 'misses'. Value becomes 'their little brother' (gender-neutral).\n"
+            "-   **Output:** {\"misses\": \"their little brother\"}\n\n"
+            "-   **Input:** 'my favorite color is blue'\n"
+            "-   **Analysis:** Subject is a pronoun. Key is 'favorite color'. Value is 'blue'.\n"
+            "-   **Output:** {\"favorite color\": \"blue\"}\n\n"
             "## User Message to Analyze:\n"
             f"\"{user_message}\""
         )
         try:
-            # Use the centralized text-only safety settings
             response = await self.gemini_client.aio.models.generate_content(
-                model=self.MODEL_NAME, 
-                contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])], 
-                config=self.GEMINI_TEXT_CONFIG
+                model=self.bot.MODEL_NAME,
+                contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])],
+                config=self.bot.GEMINI_TEXT_CONFIG
             )
             raw_text = response.text.strip()
-            # A more robust regex to find JSON within ```json ``` blocks or just raw
             json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', raw_text, re.DOTALL)
             if json_match:
-                # Prioritize the content of the json block if it exists, otherwise take the raw json
                 json_string = json_match.group(1) or json_match.group(2)
                 return json.loads(json_string)
         except Exception as e:
