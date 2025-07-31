@@ -107,7 +107,7 @@ class VinnyLogic(commands.Cog):
                 tools = []
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                     tools = [types.Tool(google_search=types.GoogleSearch())]; self.bot.API_CALL_COUNTS["search_grounding"] += 1
-                if tools: config = types.GenerateContentConfig(tools=tools) if config is None else config._replace(tools=tools)
+                if tools: config = types.GenerateContentConfig(tools=tools) if config is None else config.__replace__(tools=tools)
 
                 self.bot.API_CALL_COUNTS["text_generation"] += 1; await self.bot.update_api_count_in_firestore()
                 response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
