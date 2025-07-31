@@ -603,18 +603,27 @@ class VinnyLogic(commands.Cog):
         
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
-        match = re.search(r'^(my\s+|their\s+|his\s+|her\s+)?(.*?)\s+is\s+(.*)$', knowledge_string, re.IGNORECASE)
-        if not match:
-            await ctx.send("eh? what're you tryin' to tell me? say it like this: `!vinnyknows my favorite food is pizza`.")
-            return
-        key, value = match.group(2).strip(), match.group(3).strip()
-        if not key or not value:
-            await ctx.send("you gotta give me a thing and what it is. vinny's not a mind reader.")
-            return
+        """Lets users teach Vinny facts about them using natural language."""
+        user_id = str(ctx.author.id)
         guild_id = str(ctx.guild.id) if ctx.guild else None
-        success = await self.bot.save_user_profile_fact(str(ctx.author.id), guild_id, key, value)
-        if success:
-            await ctx.send(f"aight, i got it. so '{key}' is '{value}'. vinny will... probably remember that.")
+        
+        # Use the bot's AI to understand the sentence instead of a rigid pattern
+        extracted_facts = await self.bot.extract_facts_from_message(knowledge_string)
+
+        if not extracted_facts:
+            await ctx.send("eh? what're you tryin' to tell me? i didn't get that. try sayin' it like 'my favorite food is pizza'.")
+            return
+
+        # Loop through all facts found and save them
+        saved_facts = []
+        for key, value in extracted_facts.items():
+            success = await self.bot.save_user_profile_fact(user_id, guild_id, key, value)
+            if success:
+                saved_facts.append(f"'{key}' is '{value}'")
+
+        if saved_facts:
+            facts_confirmation = ", ".join(saved_facts)
+            await ctx.send(f"aight, i got it. so {facts_confirmation}. vinny will... probably remember that. maybe.")
         else:
             await ctx.send("my head's all fuzzy. tried to remember that but it slipped away.")
 
