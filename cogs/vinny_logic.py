@@ -110,7 +110,6 @@ class VinnyLogic(commands.Cog):
                 prompt_parts.append(types.Part(text=(f"You are responding to a specific reply. The user '{message.author.display_name}' replied with: \"{message.content}\"\nThey are replying to an older message from '{replied_to_message.author.display_name}' which said: \"{replied_to_message.content}\"\n\nYour task is to respond to the OLDER message's content.")))
                 config = self.bot.GEMINI_TEXT_CONFIG
 
-            await self.update_vinny_mood()
             dynamic_persona_injection = f"right now, your current mood is '{self.bot.current_mood}'."
             final_reply_prompt_parts = [types.Part(text=f"{self.bot.personality_instruction}\n{dynamic_persona_injection}\n\n"), *prompt_parts]
             
@@ -124,33 +123,14 @@ class VinnyLogic(commands.Cog):
                     for chunk in self.bot.split_message(response.text):
                         await message.channel.send(chunk.lower())
                         await asyncio.sleep(random.uniform(1.0, 1.5))
-            return True
         except discord.NotFound:
             sys.stderr.write("Warning: Could not find replied-to message.\n")
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to handle reply: {e}\n")
-        return False
 
-    # --- REVISED: HELPER for Standard Text/Image Responses ---
+    # --- HELPER for Standard Text/Image Responses ---
     async def _handle_text_or_image_response(self, message: discord.Message):
         """Handles a standard message that might contain text, an image, or both."""
-        
-        # --- FIX: Trigger Check (on original message content) ---
-        response_trigger = None
-        bot_names = ["vinny", "vincenzo", "vin vin"]
-        message_content_lower = message.content.lower()
-
-        if self.bot.user.mentioned_in(message) or any(name in message_content_lower for name in bot_names):
-            response_trigger = "direct"
-            sys.stderr.write(f"DEBUG: Direct response triggered by name or mention.\n")
-        elif self.bot.autonomous_mode_enabled or message.guild is None:
-            response_trigger = "autonomous_always"
-        elif random.random() < self.bot.autonomous_reply_chance:
-            response_trigger = "autonomous_random"
-
-        if not response_trigger:
-            return
-
         if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT:
             await message.channel.send("whoa there, pal. vinny's brain is fried.")
             return
@@ -205,9 +185,10 @@ class VinnyLogic(commands.Cog):
                 final_prompt_parts = [types.Part(text=final_instruction_text), *prompt_parts]
                 history.append(types.Content(role='user', parts=final_prompt_parts))
                 
-                # --- FIX: Grounding & API Call (using original message_content_lower) ---
+                # --- Grounding & API Call ---
                 tools = []
                 question_words = ["who is", "what is", "where is", "when is", "how is", "what's", "whats"]
+                message_content_lower = message.content.lower()
                 if "?" in message_content_lower or any(word in message_content_lower for word in question_words):
                     if self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                         tools = [types.Tool(google_search=types.GoogleSearch())]
@@ -253,9 +234,10 @@ class VinnyLogic(commands.Cog):
                         for key, value in extracted_facts.items():
                             await self.bot.save_user_profile_fact(user_id, guild_id, key, value)
     
-    # --- REVISED: MAIN EVENT LISTENER (Dispatcher) ---
+    # --- NEW, ROBUST MAIN EVENT LISTENER ---
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        # 1. Initial Checks: Ignore self, other bots, command prefixes, and already processed messages
         if message.author.bot or message.id in self.bot.processed_message_ids:
             return
         if message.content.startswith(self.bot.command_prefix):
@@ -263,23 +245,63 @@ class VinnyLogic(commands.Cog):
         self.bot.processed_message_ids[message.id] = True
 
         try:
-            # 1. Handle Direct Replies First
-            if message.reference and self.bot.user.mentioned_in(message):
-                if await self._handle_reply(message):
-                    return
+            # 2. Determine if Vinny should respond at all
+            should_respond = False
+            is_direct_reply_to_bot = False
 
-            await self.update_vinny_mood()
-            
-            # 2. Clean message content specifically for action triggers
+            # Check if it's a reply directly to Vinny
+            if message.reference:
+                try:
+                    replied_to = await message.channel.fetch_message(message.reference.message_id)
+                    if replied_to.author == self.bot.user:
+                        should_respond = True
+                        is_direct_reply_to_bot = True
+                except discord.NotFound:
+                    pass # Couldn't find the message, proceed normally
+
             message_content_lower = message.content.lower()
             bot_names = ["vinny", "vincenzo", "vin vin"]
+            
+            # If not a direct reply, check for other triggers
+            if not should_respond:
+                if self.bot.user.mentioned_in(message) or any(name in message_content_lower for name in bot_names):
+                    should_respond = True
+                elif self.bot.autonomous_mode_enabled and message.guild is not None:
+                    if random.random() < self.bot.autonomous_reply_chance:
+                        should_respond = True
+                elif message.guild is None: # Is a DM
+                    should_respond = True
+
+            # 3. If no trigger, exit early (or handle random reactions)
+            if not should_respond:
+                explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
+                if "pie" in message_content_lower and random.random() < 0.75:
+                    await message.add_reaction('🥧')
+                elif any(keyword in message_content_lower for keyword in explicit_reaction_keywords) or (random.random() < self.bot.reaction_chance):
+                    try:
+                        if message.guild and message.guild.emojis: emoji = random.choice(message.guild.emojis)
+                        else: emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
+                        await message.add_reaction(emoji)
+                    except Exception as e:
+                        sys.stderr.write(f"ERROR: Failed to add reaction: {e}\n")
+                return
+
+            # --- If we've reached this point, Vinny has decided to act ---
+            await self.update_vinny_mood()
+
+            # 4. Handle direct replies as a special case
+            if is_direct_reply_to_bot:
+                await self._handle_reply(message)
+                return
+
+            # 5. Clean message for action keywords (paint, tag, etc.)
             cleaned_for_actions = message_content_lower.replace(f'<@!{self.bot.user.id}>', '').replace(f'<@{self.bot.user.id}>', '').strip()
             for name in bot_names:
                 if cleaned_for_actions.startswith(name):
                     cleaned_for_actions = cleaned_for_actions[len(name):].strip(" ,:;")
                     break
-            
-            # 3. Check for specific, non-conversational action triggers
+
+            # 6. Check for specific, non-conversational action triggers
             image_trigger_keywords = ["paint", "draw", "make a picture of", "create an image of", "generate an image of"]
             for keyword in image_trigger_keywords:
                 if cleaned_for_actions.startswith(keyword):
@@ -311,19 +333,7 @@ class VinnyLogic(commands.Cog):
                             await message.channel.send("my head's spinnin'. tried to remember that.")
                         return
 
-            # 4. Handle random reactions
-            explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
-            if "pie" in message_content_lower and random.random() < 0.75:
-                await message.add_reaction('🥧')
-            elif any(keyword in message_content_lower for keyword in explicit_reaction_keywords) or (random.random() < self.bot.reaction_chance and not self.bot.user.mentioned_in(message)):
-                try:
-                    if message.guild and message.guild.emojis: emoji = random.choice(message.guild.emojis)
-                    else: emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
-                    await message.add_reaction(emoji)
-                except Exception as e:
-                    sys.stderr.write(f"ERROR: Failed to add reaction: {e}\n")
-
-            # 5. Fallback to the general conversational response handler
+            # 7. If no specific action was triggered, fall back to the general conversational handler
             await self._handle_text_or_image_response(message)
 
         except Exception as e:
