@@ -254,6 +254,8 @@ class VinnyLogic(commands.Cog):
             await ctx.send(f"you're shackled to **{partner_name}**. happened on **{profile.get('marriage_date')}**.")
         else: await ctx.send("you ain't married to nobody.")
 
+#weather command
+
     @commands.command(name='weather')
     async def weather_command(self, ctx, *, location: str):
         async with ctx.typing():
@@ -265,6 +267,8 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="🌡️ Temp", value=f"{weather['main']['temp']}°F")
         await ctx.send(embed=embed)
         
+# vinny knows command
+
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
         target_user = ctx.author
@@ -285,7 +289,32 @@ class VinnyLogic(commands.Cog):
                 saved_facts.append(f"'{key}' is '{value}'")
 
         if saved_facts:
-            await ctx.send(f"aight, i got it. so {'your' if target_user == ctx.author else f'{target_user.display_name}\'s'} {', '.join(saved_facts)}. vinny will remember.")
+            # --- NEW: Generate a dynamic, in-character response ---
+            facts_confirmation = ", ".join(saved_facts)
+            target_name = "themselves" if target_user == ctx.author else target_user.display_name
+            
+            confirmation_prompt = (
+                f"{self.bot.personality_instruction}\n\n"
+                f"# --- YOUR TASK ---\n"
+                f"A user just successfully taught you a fact. Your task is to confirm that you've learned it, but in your own chaotic, reluctant, or flirty way. Obey all your personality directives.\n"
+                f"- The user who taught you: {ctx.author.display_name}\n"
+                f"- The fact is about: {target_name}\n"
+                f"- The fact you learned: {facts_confirmation}\n\n"
+                f"Generate a short, lowercase, typo-ridden confirmation. Make sure to acknowledge the fact you learned."
+            )
+            
+            try:
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=confirmation_prompt)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                await ctx.send(response.text.strip())
+            except Exception as e:
+                sys.stderr.write(f"ERROR: Failed to generate dynamic confirmation for !vinnyknows: {e}\n")
+                # Fallback to the old message if the API fails
+                await ctx.send(f"aight, i got it. so {'your' if target_user == ctx.author else f'{target_user.display_name}\'s'} {facts_confirmation}. vinny will remember.")
+
         else:
             await ctx.send("my head's all fuzzy. tried to remember that.")
 
