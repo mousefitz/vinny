@@ -291,8 +291,7 @@ class VinnyBot(commands.Bot):
         elif "mist" in weather_main or "fog" in weather_main or "haze" in weather_main: return "🌫️"
         else: return "🌎"
 
-    # vinny/main.py
-
+#fix for merge bug
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: 
             sys.stderr.write("ERROR: Firestore database not initialized. Cannot save fact.\n")
@@ -306,7 +305,8 @@ class VinnyBot(commands.Bot):
 
         try:
             profile_ref = self.db.collection(path).document(user_id)
-            await self.loop.run_in_executor(None, profile_ref.set, data_to_save, merge=True)
+            # FIX: Wrap the database call in a lambda to correctly pass the 'merge' argument
+            await self.loop.run_in_executor(None, lambda: profile_ref.set(data_to_save, merge=True))
             sys.stderr.write("DEBUG: Firestore save successful.\n")
             return True
         except Exception as e:
