@@ -374,30 +374,11 @@ class VinnyBot(commands.Bot):
         doc_data = {"timestamp": datetime.datetime.now(datetime.UTC), "summary": summary_data.get("summary", ""), "keywords": summary_data.get("keywords", [])}
         await self.add_doc_to_firestore(self.db.collection(path), doc_data)
 
-    async def save_explicit_memory(self, user_id: str, guild_id: str | None, memory_text: str):
-        if not self.db: return False
-        path = f"artifacts/{self.APP_ID}/servers/{guild_id}/user_memories" if guild_id else f"artifacts/{self.APP_ID}/users/{user_id}/dm_memories"
-        doc_ref = self.db.collection(path).document(user_id).collection("items") if guild_id else self.db.collection(path)
-        return await self.add_doc_to_firestore(doc_ref, {"timestamp": datetime.datetime.now(datetime.UTC), "memory_text": memory_text})
-
-    async def retrieve_explicit_memories(self, user_id: str, guild_id: str | None, query: str):
-        if not self.db: return "vinny's brain ain't workin'..."
-        path = f"artifacts/{self.APP_ID}/servers/{guild_id}/user_memories" if guild_id else f"artifacts/{self.APP_ID}/users/{user_id}/dm_memories"
-        docs = await self.get_docs_from_firestore(self.db.collection(path).document(user_id).collection("items") if guild_id else self.db.collection(path))
-        matches = [doc['memory_text'] for doc in docs if query.lower() in doc.get('memory_text', '').lower()]
-        return f"oh, {query}, eh? vinny remembers...\n- " + "\n- ".join(matches) if matches else f"nah, {query}? doesn't ring a bell..."
-
     async def retrieve_general_memories(self, guild_id: str, query_keywords: list, limit: int = 2):
         if not self.db: return []
         docs = await self.get_docs_from_firestore(self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/summaries"))
         relevant = [doc for doc in docs if any(qk.lower() in (dk.lower() for dk in doc.get("keywords", [])) or qk.lower() in doc.get("summary", "").lower() for qk in query_keywords)]
         return sorted(relevant, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
-
-    async def get_random_explicit_memory(self, user_id: str, guild_id: str | None):
-        if not self.db: return None
-        path = f"artifacts/{self.APP_ID}/servers/{guild_id}/user_memories" if guild_id else f"artifacts/{self.APP_ID}/users/{user_id}/dm_memories"
-        docs = await self.get_docs_from_firestore(self.db.collection(path).document(user_id).collection("items") if guild_id else self.db.collection(path))
-        return random.choice(docs).get("memory_text") if docs else None
 
     async def save_proposal(self, proposer_id: str, recipient_id: str):
         if not self.db: return False

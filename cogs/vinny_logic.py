@@ -195,8 +195,7 @@ class VinnyLogic(commands.Cog):
             description="Heh. Aight, so you need help? Pathetic. Here's the stuff I can do if ya use the '!' thing. Don't get used to it.",
             color=discord.Color.dark_gold()
         )
-        embed.add_field(name="!remember [text]", value="Tells me to remember somethin'. I'll probably forget.\n*Example: `!remember my dog is named fido`*", inline=False)
-        embed.add_field(name="!recall [topic]", value="Tries to remember somethin' we talked about *in this specific place*.\n*Example: `!recall fido`*", inline=False)
+        
         embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
         embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
         embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
@@ -265,15 +264,6 @@ class VinnyLogic(commands.Cog):
         embed = discord.Embed(title=f"{self.bot.get_weather_emoji(weather['weather'][0]['main'])} Weather in {coords['name']}", color=discord.Color.blue())
         embed.add_field(name="🌡️ Temp", value=f"{weather['main']['temp']}°F")
         await ctx.send(embed=embed)
-
-    @commands.command(name='remember')
-    async def remember_command(self, ctx, *, text: str):
-        if await self.bot.save_explicit_memory(str(ctx.author.id), str(ctx.guild.id) if ctx.guild else None, text):
-            await ctx.send(f"alright, {ctx.author.mention}. vinny's got it.")
-
-    @commands.command(name='recall')
-    async def recall_command(self, ctx, *, topic: str):
-        await ctx.send(await self.bot.retrieve_explicit_memories(str(ctx.author.id), str(ctx.guild.id) if ctx.guild else None, topic))
         
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
