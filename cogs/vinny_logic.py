@@ -310,15 +310,27 @@ class VinnyLogic(commands.Cog):
     @tasks.loop(minutes=30)
     async def memory_scheduler(self):
         await self.bot.wait_until_ready()
+        sys.stderr.write("DEBUG: Memory scheduler starting...\n")
         for guild in self.bot.guilds:
             messages = []
             for channel in guild.text_channels:
                 if channel.permissions_for(guild.me).read_message_history:
-                    async for message in channel.history(limit=100, after=datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)):
-                        if not message.author.bot: messages.append({"author": message.author.display_name, "content": message.content})
+                    try:
+                        async for message in channel.history(limit=100, after=datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)):
+                            if not message.author.bot: messages.append({"author": message.author.display_name, "content": message.content, "timestamp": message.created_at.isoformat()})
+                    except discord.Forbidden:
+                        continue # Skip channels we can't read
+                    except Exception as e:
+                        sys.stderr.write(f"ERROR: Could not fetch history for channel '{channel.name}': {e}\n")
+            
             if len(messages) > 5:
+                sys.stderr.write(f"DEBUG: Generating summary for guild '{guild.name}' with {len(messages)} messages.\n")
+                # Sort messages by timestamp to ensure correct conversational order
+                messages.sort(key=lambda x: x['timestamp'])
                 if summary_data := await self.bot.generate_memory_summary(messages):
                     await self.bot.save_memory(str(guild.id), summary_data)
+                    sys.stderr.write(f"DEBUG: Saved memory summary for guild '{guild.name}'.\n")
+        sys.stderr.write("DEBUG: Memory scheduler finished.\n")
 
     @commands.command(name='help')
     async def help_command(self, ctx):
