@@ -131,6 +131,98 @@ class VinnyLogic(commands.Cog):
                     if extracted_facts := await extract_facts_from_message(self.bot, message.content):
                         for key, value in extracted_facts.items(): await self.bot.save_user_profile_fact(user_id, guild_id, key, value)
     
+    #knowledge request function
+
+    async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
+        """
+        A dedicated handler for when a user asks what Vinny knows about someone.
+        This function ONLY uses the target_user's profile, avoiding context bleed from chat history.
+        """
+        user_id = str(target_user.id)
+        guild_id = str(message.guild.id) if message.guild else None
+        
+        # 1. Fetch ONLY the target_user's specific profile
+        user_profile = await self.bot.get_user_profile(user_id, guild_id)
+
+        if not user_profile:
+            await message.channel.send(f"about {target_user.display_name}? i got nothin'. a blank canvas. kinda intimidatin', actually.")
+            return
+
+        # 2. Convert the profile dictionary into a clean list of facts for the AI
+        facts_list = [f"- {key.replace('_', ' ')} is {value}" for key, value in user_profile.items()]
+        facts_string = "\n".join(facts_list)
+
+        # 3. Use a targeted prompt that focuses ONLY on summarizing these facts
+        summary_prompt = (
+            f"{self.bot.personality_instruction}\n\n"
+            f"# --- YOUR TASK ---\n"
+            f"A user, '{message.author.display_name}', is asking what you know about '{target_user.display_name}'. Your task is to summarize the facts you've learned about them in a creative, chaotic, or flirty way. Obey all your personality directives.\n\n"
+            f"## FACTS I KNOW ABOUT {target_user.display_name}:\n"
+            f"{facts_string}\n\n"
+            f"## INSTRUCTIONS:\n"
+            f"1.  Read the facts provided above.\n"
+            f"2.  Weave them together into a short, lowercase, typo-ridden monologue.\n"
+            f"3.  Do not just list the facts. Interpret them, connect them, or be confused by them in your own unique voice."
+        )
+
+        try:
+            async with message.channel.typing():
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=summary_prompt)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                await message.channel.send(response.text.strip())
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to generate dynamic summary for knowledge request: {e}\n")
+            await message.channel.send("my head's all fuzzy. i know some stuff but the words ain't comin' out right.")
+
+    async def _handle_server_knowledge_request(self, message: discord.Message):
+        """
+        A dedicated handler for when a user asks what Vinny has learned about the server.
+        This function uses conversation summaries to generate a response.
+        """
+        if not message.guild:
+            await message.channel.send("what server? we're in a private chat, pal. my brain's fuzzy enough as it is.")
+            return
+
+        guild_id = str(message.guild.id)
+        
+        # 1. Fetch all conversation summaries for this server
+        summaries = await self.bot.retrieve_server_summaries(guild_id)
+
+        if not summaries:
+            await message.channel.send(f"this place? i ain't learned nothin' yet. it's all a blur. a beautiful, chaotic blur.")
+            return
+
+        # 2. Format the summaries into a string for the AI
+        formatted_summaries = "\n".join([f"- {s.get('summary', '...a conversation i already forgot.')}" for s in summaries])
+
+        # 3. Use a targeted prompt to synthesize the summaries
+        synthesis_prompt = (
+            f"{self.bot.personality_instruction}\n\n"
+            f"# --- YOUR TASK ---\n"
+            f"A user, '{message.author.display_name}', is asking what you've learned from overhearing conversations in this server. Your task is to synthesize the provided conversation summaries into a single, chaotic, and insightful monologue. Obey all your personality directives.\n\n"
+            f"## CONVERSATION SUMMARIES I'VE OVERHEARD:\n"
+            f"{formatted_summaries}\n\n"
+            f"## INSTRUCTIONS:\n"
+            f"1.  Read all the summaries to get a feel for the server's vibe.\n"
+            f"2.  Do NOT just list the summaries. Weave them together into a story or a series of scattered, in-character thoughts.\n"
+            f"3.  Generate a short, lowercase, typo-ridden response that shows what you've gleaned from listening in."
+        )
+
+        try:
+            async with message.channel.typing():
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=synthesis_prompt)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                await message.channel.send(response.text.strip())
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to generate dynamic summary for server knowledge request: {e}\n")
+            await message.channel.send("my head's a real mess. i've been listenin', but it's all just noise right now.")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
@@ -153,6 +245,30 @@ class VinnyLogic(commands.Cog):
             
             await self.update_vinny_mood()
             if is_direct_reply: return await self._handle_reply(message)
+
+            # --- UPGRADED: Check for knowledge request phrases about any user ---
+            knowledge_pattern = re.compile(r"what do you know about\s(.+)", re.IGNORECASE)
+            match = knowledge_pattern.search(message.content)
+            if match:
+                target_name = match.group(1).strip().rstrip('?')
+                
+                # --- NEW: Check if the user is asking about the server ---
+                if target_name.lower() in ["this server", "the server", "this place", "here"]:
+                    await self._handle_server_knowledge_request(message)
+                    return
+
+                target_user = None
+                if target_name.lower() == 'me':
+                    target_user = message.author
+                elif message.mentions:
+                    target_user = message.mentions[0]
+                else:
+                    if message.guild:
+                        target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
+
+                if target_user:
+                    await self._handle_knowledge_request(message, target_user)
+                    return # Stop processing to avoid the general response handler
 
             cleaned_actions = message.content.lower().replace(f'<@!{self.bot.user.id}>', '').strip()
             if any(cleaned_actions.startswith(kw) for kw in ["paint", "draw"]): return await self._handle_image_request(message, cleaned_actions)

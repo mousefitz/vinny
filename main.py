@@ -404,6 +404,20 @@ class VinnyBot(commands.Bot):
         relevant = [doc for doc in docs if any(qk.lower() in (dk.lower() for dk in doc.get("keywords", [])) or qk.lower() in doc.get("summary", "").lower() for qk in query_keywords)]
         return sorted(relevant, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
 
+    #new server summary helper function
+
+    async def retrieve_server_summaries(self, guild_id: str):
+        """Retrieves all conversation summary documents for a given server."""
+        if not self.db: return []
+        try:
+            summaries_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/summaries")
+            docs = await self.loop.run_in_executor(None, summaries_ref.stream)
+            # Return the full document dictionary for each summary
+            return [doc.to_dict() for doc in docs]
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to retrieve server summaries for guild {guild_id}: {e}\n")
+            return []
+
     async def save_proposal(self, proposer_id: str, recipient_id: str):
         if not self.db: return False
         try:
