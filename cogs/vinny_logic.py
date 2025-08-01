@@ -121,7 +121,8 @@ class VinnyLogic(commands.Cog):
         except Exception as e: pass
 
 #fix#
-    async def _handle_text_or_image_response(self, message: discord.Message):
+    # --- FIX: Add 'is_autonomous' parameter and change the prompt based on it ---
+    async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False):
         if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
             async with message.channel.typing():
@@ -129,12 +130,10 @@ class VinnyLogic(commands.Cog):
                 user_profile = await self.bot.get_user_profile(user_id, guild_id) or {}
                 profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
                 
-                # --- NEW: Check for a stored nickname ---
                 user_name_to_use = await self.bot.get_user_nickname(user_id)
                 if not user_name_to_use:
                     user_name_to_use = message.author.display_name
 
-                # FIX: Initialize the history with a user role for the prompt and a model role for the acknowledgment
                 history = [
                     types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
                     types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
@@ -152,8 +151,16 @@ class VinnyLogic(commands.Cog):
                             prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read())))
                             config = None; break
                 
-                # This line now uses the potentially overridden nickname
-                final_instruction_text = (f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}. Facts: {profile_facts_string}. Respond to the message.")
+                # --- FIX: This block now chooses the correct instruction for the AI ---
+                if is_autonomous:
+                    final_instruction_text = (f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation. "
+                                              f"Comment on the last message, which was from '{user_name_to_use}'. "
+                                              f"Your known facts about them are: {profile_facts_string}.")
+                else:
+                    final_instruction_text = (f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}. "
+                                              f"Facts: {profile_facts_string}. Respond to the message.")
+                # --- END FIX ---
+                
                 history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text), *prompt_parts]))
                 
                 tools = []
@@ -275,15 +282,20 @@ class VinnyLogic(commands.Cog):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
-            should_respond, is_direct_reply = False, False
+            # --- FIX: Added 'is_autonomous' to track the reason for responding ---
+            should_respond, is_direct_reply, is_autonomous = False, False, False
             if message.reference:
                 if (await message.channel.fetch_message(message.reference.message_id)).author == self.bot.user:
                     should_respond, is_direct_reply = True, True
             if not should_respond:
                 bot_names = ["vinny", "vincenzo", "vin vin"]
-                if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names): should_respond = True
-                elif self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance: should_respond = True
-                elif message.guild is None: should_respond = True
+                if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
+                    should_respond = True
+                # --- FIX: If we respond autonomously, set the flag ---
+                elif self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance:
+                    should_respond, is_autonomous = True, True
+                elif message.guild is None:
+                    should_respond = True
             
             if not should_respond:
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
@@ -341,7 +353,8 @@ class VinnyLogic(commands.Cog):
             if match := re.search(r"my name is\s+([A-Z][a-z]{2,})", message.content, re.IGNORECASE):
                 if await self.bot.save_user_nickname(str(message.author.id), match.group(1)): return await message.channel.send(f"aight, {match.group(1)}, got it.")
             
-            await self._handle_text_or_image_response(message)
+            # --- FIX: Pass the 'is_autonomous' flag to the handler ---
+            await self._handle_text_or_image_response(message, is_autonomous=is_autonomous)
         except Exception as e:
             sys.stderr.write(f"CRITICAL ERROR in on_message: {e}\n")
             import traceback; traceback.print_exc(file=sys.stderr)
