@@ -88,6 +88,11 @@ class VinnyLogic(commands.Cog):
                 user_profile = await self.bot.get_user_profile(user_id, guild_id) or {}
                 profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
                 
+                # --- NEW: Check for a stored nickname ---
+                user_name_to_use = await self.bot.get_user_nickname(user_id)
+                if not user_name_to_use:
+                    user_name_to_use = message.author.display_name
+
                 # FIX: Initialize the history with a user role for the prompt and a model role for the acknowledgment
                 history = [
                     types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
@@ -106,7 +111,8 @@ class VinnyLogic(commands.Cog):
                             prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read())))
                             config = None; break
                 
-                final_instruction_text = (f"Your mood is {self.bot.current_mood}. Replying to {message.author.display_name}. Facts: {profile_facts_string}. Respond to the message.")
+                # This line now uses the potentially overridden nickname
+                final_instruction_text = (f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}. Facts: {profile_facts_string}. Respond to the message.")
                 history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text), *prompt_parts]))
                 
                 tools = []
@@ -246,7 +252,7 @@ class VinnyLogic(commands.Cog):
             await self.update_vinny_mood()
             if is_direct_reply: return await self._handle_reply(message)
 
-            # --- UPGRADED: Check for knowledge request phrases about any user ---
+             # --- UPGRADED: Check for knowledge request phrases about any user ---
             knowledge_pattern = re.compile(r"what do you know about\s(.+)", re.IGNORECASE)
             match = knowledge_pattern.search(message.content)
             if match:
@@ -264,7 +270,12 @@ class VinnyLogic(commands.Cog):
                     target_user = message.mentions[0]
                 else:
                     if message.guild:
+                        # First, try to find the user by their current display name or username
                         target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
+                        
+                        # FIX: If that fails, search Vinny's own memory for the nickname
+                        if not target_user:
+                            target_user = await self.bot.find_user_by_vinny_name(message.guild, target_name)
 
                 if target_user:
                     await self._handle_knowledge_request(message, target_user)
