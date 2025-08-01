@@ -54,11 +54,13 @@ class VinnyLogic(commands.Cog):
 
             prompt_rewriter_instruction = (
                 f"You are Vinny, an eccentric and chaotic artist. A user wants you to paint a picture. Their simple request is: '{image_prompt}'.\n"
-                f"Your task is to rewrite this simple request into a rich, detailed, and artistic prompt for an image generation AI. Infuse it with your personality.\n"
-                f"- **Style**: Describe the scene as a masterpiece painting, using terms like 'oil on canvas', 'dramatic lighting', 'vibrant colors', 'chaotic energy'.\n"
-                f"- **Negatives**: Crucially, if the user asks for something to be excluded (e.g., 'without flowers'), you MUST add strong negative prompts like 'no flowers', 'devoid of flowers', 'barren of floral elements'.\n"
-                f"- **Persona**: If it doesn't contradict the user, consider adding elements of your world: your dogs, your messy garden, a bottle of wine, a slice of pizza.\n"
-                f"The final rewritten prompt should be a single, descriptive paragraph. Do not write any other text."
+                f"Your task is to rewrite this request into a richer, more detailed, and artistic prompt for an image generation AI. Infuse it with your personality while respecting the user's original vision.\n"
+                f"## RULES:\n"
+                f"1.  **Preserve the Core Subject**: This is your most important rule. The final prompt MUST be about the user's original subject. For example, if they ask for 'a cat', the final prompt must be about a cat. Do not change the subject.\n"
+                f"2.  **Enhance with Style**: Describe the scene as a masterpiece painting. Use artistic terms like 'oil on canvas', 'dramatic lighting', 'vibrant colors', 'chaotic energy'. This is how you add your flair.\n"
+                f"3.  **Respect Negatives**: If the user asks for something to be excluded (e.g., 'no hats'), you MUST add strong negative prompts like 'no hats, wearing no headwear, bare-headed'.\n"
+                f"4.  **Persona is Secondary**: You can ONLY add elements of your own world (your dogs, wine, pizza) if they DO NOT contradict or overshadow the user's original request. If the user's request is very specific, do not add your own elements.\n\n"
+                f"The final rewritten prompt should be a single, descriptive paragraph focused on enhancing the user's idea. Do not write any other text."
             )
             
             smarter_prompt = image_prompt
@@ -78,20 +80,39 @@ class VinnyLogic(commands.Cog):
             if image_file:
                 response_text = "here, i made this for ya."
                 try:
-                    comment_prompt = (
-                        f"You are Vinny, an eccentric artist. You just finished painting a picture based on the user's request for '{image_prompt}'.\n"
-                        f"Generate a short, single-paragraph response to show them your work. Be chaotic, funny, or complain about it, in your typical lowercase, typo-ridden style.\n"
-                        f"DO NOT repeat the original prompt '{image_prompt}' in your response."
+                    # --- FIX: Make the text model 'see' the image it's commenting on ---
+                    
+                    # 1. Prepare the image data to be sent to the text AI.
+                    image_file.seek(0) # Reset buffer to the beginning
+                    image_bytes = image_file.read()
+
+                    # 2. Create a new prompt that instructs the AI to look at the image.
+                    comment_prompt_text = (
+                        f"You are Vinny, an eccentric artist. You just finished painting the attached picture based on the user's request for '{image_prompt}'.\n"
+                        f"Your task is to generate a short, single-paragraph response to show them your work. LOOK AT THE IMAGE and comment on what you ACTUALLY painted. "
+                        f"Be chaotic, funny, or complain about it in your typical lowercase, typo-ridden style."
                     )
+                    
+                    # 3. Create a multimodal prompt containing both the text instructions and the image data.
+                    prompt_parts = [
+                        types.Part(text=comment_prompt_text),
+                        types.Part(inline_data=types.Blob(mime_type="image/png", data=image_bytes))
+                    ]
+
+                    # 4. Call the AI with the combined text-and-image prompt.
                     comment_response = await self.bot.gemini_client.aio.models.generate_content(
-                        model=self.bot.MODEL_NAME, 
-                        contents=[types.Content(role='user', parts=[types.Part(text=comment_prompt)])],
-                        config=self.bot.GEMINI_TEXT_CONFIG)
+                        model=self.bot.MODEL_NAME,
+                        contents=[types.Content(role='user', parts=prompt_parts)],
+                        config=self.bot.GEMINI_TEXT_CONFIG
+                    )
                     if comment_response.text:
                         response_text = comment_response.text.strip()
+
                 except Exception as e:
                     sys.stderr.write(f"ERROR: Failed to generate creative image comment: {e}\n")
                 
+                # 5. Reset the image buffer again before sending it to Discord.
+                image_file.seek(0)
                 await message.channel.send(response_text, file=discord.File(image_file, filename="vinny_masterpiece.png"))
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
