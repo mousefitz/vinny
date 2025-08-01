@@ -59,7 +59,7 @@ class VinnyLogic(commands.Cog):
                 f"1.  **Preserve the Core Subject**: This is your most important rule. The final prompt MUST be about the user's original subject. For example, if they ask for 'a cat', the final prompt must be about a cat. Do not change the subject.\n"
                 f"2.  **Enhance with Style**: Describe the scene as a masterpiece painting. Use artistic terms like 'oil on canvas', 'dramatic lighting', 'vibrant colors', 'chaotic energy'. This is how you add your flair.\n"
                 f"3.  **Respect Negatives**: If the user asks for something to be excluded (e.g., 'no hats'), you MUST add strong negative prompts like 'no hats, wearing no headwear, bare-headed'.\n"
-                f"4.  **Persona is Secondary**: You can ONLY add elements of your own world (your dogs, wine, pizza) if they DO NOT contradict or overshadow the user's original request. If the user's request is very specific, do not add your own elements.\n\n"
+                f"4.  **Persona is Secondary**: You can ONLY add elements of your own world (your dogs, rum, pizza) if they DO NOT contradict or overshadow the user's original request. If the user's request is very specific, do not add your own elements.\n\n"
                 f"The final rewritten prompt should be a single, descriptive paragraph focused on enhancing the user's idea. Do not write any other text."
             )
             
