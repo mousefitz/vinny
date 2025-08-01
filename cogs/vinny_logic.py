@@ -300,12 +300,37 @@ class VinnyLogic(commands.Cog):
             self.bot.current_mood = random.choice([m for m in self.bot.MOODS if m != self.bot.current_mood])
             self.bot.last_mood_change_time = datetime.datetime.now()
 
+    # vinny/cogs/vinny_logic.py
+
     async def find_and_tag_member(self, message, user_name: str):
-        if not message.guild: return
+        if not message.guild:
+            await message.channel.send("eh, who am i supposed to tag out here? this is a private chat, pal.")
+            return
         target_member = discord.utils.find(lambda m: user_name.lower() in m.display_name.lower(), message.guild.members)
-        if not target_member: target_member = await self.bot.find_user_by_vinny_name(message.guild, user_name)
-        if target_member: await message.channel.send(f"aight, here they are: {target_member.mention}")
-        else: await message.channel.send(f"who? couldn't find anyone named '{user_name}'.")
+        if not target_member:
+            target_member = await self.bot.find_user_by_vinny_name(message.guild, user_name)
+        
+        if target_member:
+            response_text = f"aight, here they are: {target_member.mention}"
+            try:
+                tagging_prompt = (
+                    f"{self.bot.personality_instruction}\n\n"
+                    f"The user '{message.author.display_name}' asked you to tag the user '{target_member.display_name}'. You found them. "
+                    f"Generate a short, in-character response to announce that you are tagging them. Be sassy, cranky, or flirty about it."
+                )
+                api_response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=tagging_prompt)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                if api_response.text:
+                    response_text = f"{api_response.text.strip()} {target_member.mention}"
+            except Exception as e:
+                sys.stderr.write(f"ERROR: Failed to generate creative tag comment: {e}\n")
+            
+            await message.channel.send(response_text)
+        else:
+            await message.channel.send(f"who? i looked all over this joint, couldn't find anyone named '{user_name}'.")
 
     @tasks.loop(minutes=30)
     async def memory_scheduler(self):
