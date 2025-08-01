@@ -323,6 +323,16 @@ class VinnyLogic(commands.Cog):
                     return # Stop processing to avoid the general response handler
 
             cleaned_actions = message.content.lower().replace(f'<@!{self.bot.user.id}>', '').strip()
+
+            # --- FIX: Remove Vinny's name from the start of the command ---
+            bot_names = ["vinny", "vincenzo", "vin vin"]
+            for name in bot_names:
+                if cleaned_actions.startswith(f"{name} "):
+                    # This removes the name and the space after it
+                    cleaned_actions = cleaned_actions[len(name)+1:]
+                    break
+            # --- END FIX ---
+
             if any(cleaned_actions.startswith(kw) for kw in ["paint", "draw"]): return await self._handle_image_request(message, cleaned_actions)
             if any(cleaned_actions.startswith(kw) for kw in ["tag", "ping"]): return await self.find_and_tag_member(message, cleaned_actions)
             if "what's my name" in message.content.lower():
