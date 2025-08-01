@@ -286,54 +286,54 @@ class VinnyLogic(commands.Cog):
                 elif message.guild is None: should_respond = True
             
             if not should_respond:
+                explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
                 if "pie" in message.content.lower() and random.random() < 0.75: await message.add_reaction('🥧')
-                elif random.random() < self.bot.reaction_chance: await message.add_reaction(random.choice(message.guild.emojis) if message.guild.emojis else '👍')
+                elif any(keyword in message.content.lower() for keyword in explicit_reaction_keywords) or (random.random() < self.bot.reaction_chance):
+                    try:
+                        if message.guild and message.guild.emojis: emoji = random.choice(message.guild.emojis)
+                        else: emoji = random.choice(['😂', '👍', '👀', '🍕', '🍻', '🥃', '🐶', '🎨'])
+                        await message.add_reaction(emoji)
+                    except Exception as e:
+                        sys.stderr.write(f"ERROR: Failed to add reaction: {e}\n")
                 return
             
             await self.update_vinny_mood()
             if is_direct_reply: return await self._handle_reply(message)
 
-             # --- UPGRADED: Check for knowledge request phrases about any user ---
             knowledge_pattern = re.compile(r"what do you know about\s(.+)", re.IGNORECASE)
-            match = knowledge_pattern.search(message.content)
-            if match:
+            if match := knowledge_pattern.search(message.content):
                 target_name = match.group(1).strip().rstrip('?')
-                
-                # --- NEW: Check if the user is asking about the server ---
                 if target_name.lower() in ["this server", "the server", "this place", "here"]:
-                    await self._handle_server_knowledge_request(message)
-                    return
-
+                    return await self._handle_server_knowledge_request(message)
                 target_user = None
-                if target_name.lower() == 'me':
-                    target_user = message.author
-                elif message.mentions:
-                    target_user = message.mentions[0]
+                if target_name.lower() == 'me': target_user = message.author
+                elif message.mentions: target_user = message.mentions[0]
                 else:
                     if message.guild:
-                        # First, try to find the user by their current display name or username
                         target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
-                        
-                        # FIX: If that fails, search Vinny's own memory for the nickname
-                        if not target_user:
-                            target_user = await self.bot.find_user_by_vinny_name(message.guild, target_name)
+                        if not target_user: target_user = await self.bot.find_user_by_vinny_name(message.guild, target_name)
+                if target_user: return await self._handle_knowledge_request(message, target_user)
 
-                if target_user:
-                    await self._handle_knowledge_request(message, target_user)
-                    return # Stop processing to avoid the general response handler
-
-            cleaned_actions = message.content.lower().replace(f'<@!{self.bot.user.id}>', '').strip()
-
-            # --- FIX: Remove Vinny's name from the start of the command ---
+            # --- YOUR FIX IMPLEMENTED HERE ---
+            cleaned_actions = message.content.lower().replace(f'<@!{self.bot.user.id}>', '').replace(f'<@{self.bot.user.id}>', '').strip()
             bot_names = ["vinny", "vincenzo", "vin vin"]
             for name in bot_names:
+                # Check for "vinny " not just "vinny" to avoid accidentally trimming words like "vinnyisgreat"
                 if cleaned_actions.startswith(f"{name} "):
-                    # This removes the name and the space after it
                     cleaned_actions = cleaned_actions[len(name)+1:]
                     break
-            # --- END FIX ---
-
-            if any(cleaned_actions.startswith(kw) for kw in ["paint", "draw"]): return await self._handle_image_request(message, cleaned_actions)
+            
+            image_trigger_keywords = ["paint", "draw", "make a picture of", "create an image of", "generate an image of"]
+            if any(cleaned_actions.startswith(kw) for kw in image_trigger_keywords):
+                # We need to find the start of the actual prompt after the keyword
+                prompt_text = cleaned_actions
+                for kw in image_trigger_keywords:
+                    if cleaned_actions.startswith(kw):
+                        prompt_text = cleaned_actions[len(kw):].strip()
+                        break
+                return await self._handle_image_request(message, prompt_text)
+            # --- END OF FIX ---
+            
             if any(cleaned_actions.startswith(kw) for kw in ["tag", "ping"]): return await self.find_and_tag_member(message, cleaned_actions)
             if "what's my name" in message.content.lower():
                 name = await self.bot.get_user_nickname(str(message.author.id))
@@ -344,7 +344,7 @@ class VinnyLogic(commands.Cog):
             await self._handle_text_or_image_response(message)
         except Exception as e:
             sys.stderr.write(f"CRITICAL ERROR in on_message: {e}\n")
-            import traceback; traceback.print_exc()
+            import traceback; traceback.print_exc(file=sys.stderr)
 
     async def update_vinny_mood(self):
         if datetime.datetime.now() - self.bot.last_mood_change_time > self.bot.MOOD_CHANGE_INTERVAL:
