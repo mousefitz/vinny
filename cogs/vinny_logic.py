@@ -28,32 +28,73 @@ class VinnyLogic(commands.Cog):
     def cog_unload(self):
         self.memory_scheduler.cancel()
 
+    # fixed image prompt
+
     async def _handle_image_request(self, message: discord.Message, image_prompt: str):
         """Handles a request to paint or draw an image."""
         async with message.channel.typing():
             thinking_message = "aight, lemme get my brushes..."
             try:
-                thinking_prompt = (f"You are Vinny... generate a short phrase... '{image_prompt}'...")
-                thinking_response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[types.Content(parts=[types.Part(text=thinking_prompt)])], config=self.bot.GEMINI_TEXT_CONFIG)
-                if thinking_response.text: thinking_message = thinking_response.text.strip()
-            except Exception as e: pass
+                thinking_prompt = (
+                    f"You are Vinny, an eccentric artist. A user just asked you to paint '{image_prompt}'.\n"
+                    f"Generate a very short, in-character phrase (in lowercase with typos) that you would say as you're about to start painting.\n"
+                    f"Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and wine', 'aight aight i hear ya...'"
+                )
+                thinking_response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=thinking_prompt)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                if thinking_response.text:
+                    thinking_message = thinking_response.text.strip()
+            except Exception as e:
+                sys.stderr.write(f"ERROR: Failed to generate dynamic thinking message: {e}\n")
+            
             await message.channel.send(thinking_message)
-            prompt_rewriter_instruction = (f"You are Vinny... rewrite this prompt... '{image_prompt}'...")
+
+            prompt_rewriter_instruction = (
+                f"You are Vinny, an eccentric and chaotic artist. A user wants you to paint a picture. Their simple request is: '{image_prompt}'.\n"
+                f"Your task is to rewrite this simple request into a rich, detailed, and artistic prompt for an image generation AI. Infuse it with your personality.\n"
+                f"- **Style**: Describe the scene as a masterpiece painting, using terms like 'oil on canvas', 'dramatic lighting', 'vibrant colors', 'chaotic energy'.\n"
+                f"- **Negatives**: Crucially, if the user asks for something to be excluded (e.g., 'without flowers'), you MUST add strong negative prompts like 'no flowers', 'devoid of flowers', 'barren of floral elements'.\n"
+                f"- **Persona**: If it doesn't contradict the user, consider adding elements of your world: your dogs, your messy garden, a bottle of wine, a slice of pizza.\n"
+                f"The final rewritten prompt should be a single, descriptive paragraph. Do not write any other text."
+            )
+            
             smarter_prompt = image_prompt
             try:
-                rewritten_prompt_response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[types.Content(parts=[types.Part(text=prompt_rewriter_instruction)])], config=self.bot.GEMINI_TEXT_CONFIG)
-                if rewritten_prompt_response.text: smarter_prompt = rewritten_prompt_response.text.strip()
-            except Exception as e: pass
+                rewritten_prompt_response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=prompt_rewriter_instruction)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                if rewritten_prompt_response.text:
+                    smarter_prompt = rewritten_prompt_response.text.strip()
+            except Exception as e:
+                sys.stderr.write(f"ERROR: Failed to rewrite image prompt, using original. Error: {e}\n")
+            
             image_file = await self.bot.generate_image_with_imagen(smarter_prompt)
+            
             if image_file:
                 response_text = "here, i made this for ya."
                 try:
-                    comment_prompt = (f"You are Vinny... comment on the image for '{image_prompt}'...")
-                    comment_response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[types.Content(parts=[types.Part(text=comment_prompt)])], config=self.bot.GEMINI_TEXT_CONFIG)
-                    if comment_response.text: response_text = comment_response.text.strip()
-                except Exception as e: pass
+                    comment_prompt = (
+                        f"You are Vinny, an eccentric artist. You just finished painting a picture based on the user's request for '{image_prompt}'.\n"
+                        f"Generate a short, single-paragraph response to show them your work. Be chaotic, funny, or complain about it, in your typical lowercase, typo-ridden style.\n"
+                        f"DO NOT repeat the original prompt '{image_prompt}' in your response."
+                    )
+                    comment_response = await self.bot.gemini_client.aio.models.generate_content(
+                        model=self.bot.MODEL_NAME, 
+                        contents=[types.Content(role='user', parts=[types.Part(text=comment_prompt)])],
+                        config=self.bot.GEMINI_TEXT_CONFIG)
+                    if comment_response.text:
+                        response_text = comment_response.text.strip()
+                except Exception as e:
+                    sys.stderr.write(f"ERROR: Failed to generate creative image comment: {e}\n")
+                
                 await message.channel.send(response_text, file=discord.File(image_file, filename="vinny_masterpiece.png"))
-            else: await message.channel.send("ah, crap. vinny's hands are shaky.")
+            else:
+                await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
     async def _handle_reply(self, message: discord.Message):
         try:
