@@ -38,7 +38,7 @@ class VinnyLogic(commands.Cog):
                 thinking_prompt = (
                     f"You are Vinny, an eccentric artist. A user just asked you to paint '{image_prompt}'.\n"
                     f"Generate a very short, in-character phrase (in lowercase with typos) that you would say as you're about to start painting.\n"
-                    f"Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and wine', 'aight aight i hear ya...'"
+                    f"Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and rum', 'aight aight i hear ya...'"
                 )
                 thinking_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
