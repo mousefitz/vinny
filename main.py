@@ -294,6 +294,25 @@ class VinnyBot(commands.Bot):
         elif "mist" in weather_main or "fog" in weather_main or "haze" in weather_main: return "🌫️"
         else: return "🌎"
 
+# --- NEW: HOROSCOPE FUNCTION ---
+
+    async def get_horoscope(self, sign: str):
+        """Fetches daily horoscope data from the aztro API."""
+        if not self.http_session: return None
+        # The API endpoint needs a POST request
+        url = f"https://aztro.sameer.ai/?sign={sign.lower()}&day=today"
+        try:
+            # We use .post() instead of .get() for this specific API
+            async with self.http_session.post(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # The API nests the good stuff, so let's check for it
+                    if data and "description" in data:
+                        return data
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to fetch horoscope data: {e}\n")
+        return None
+
 #fix for merge bug
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: 

@@ -141,7 +141,44 @@ class VinnyLogic(commands.Cog):
                         await message.channel.send(chunk.lower())
         except Exception as e: pass
 
-#fix#
+# --- NEW: A dedicated handler for replies to messages with images ---
+    async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
+        """Handles when a user replies to a message containing an image and tags Vinny."""
+        try:
+            # We know the original message has an image, let's get it
+            image_attachment = original_message.attachments[0]
+            image_bytes = await image_attachment.read()
+
+            # The user's comment is in the reply_message
+            user_comment = reply_message.content
+
+            # Create a multimodal prompt for Vinny
+            prompt_text = (
+                f"{self.bot.personality_instruction}\n\n"
+                f"# --- YOUR TASK ---\n"
+                f"A user, '{reply_message.author.display_name}', just replied to the attached image with the comment: \"{user_comment}\".\n"
+                f"Your task is to look at the image and respond to their comment in your unique, chaotic, and flirty voice. Obey all personality directives."
+            )
+            
+            prompt_parts = [
+                types.Part(text=prompt_text),
+                types.Part(inline_data=types.Blob(mime_type=image_attachment.content_type, data=image_bytes))
+            ]
+
+            async with reply_message.channel.typing():
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=prompt_parts)],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                if response.text:
+                    for chunk in self.bot.split_message(response.text):
+                        await reply_message.channel.send(chunk.lower())
+
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to handle image reply: {e}\n")
+            await reply_message.channel.send("my eyes are all blurry, couldn't make out the picture, pal.")
+
     # --- FIX: Add 'is_autonomous' parameter and change the prompt based on it ---
     async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False):
         if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
@@ -303,6 +340,14 @@ class VinnyLogic(commands.Cog):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
+            # --- NEW: Check for image reply-tags first ---
+            if message.reference and self.bot.user.mentioned_in(message):
+                original_message = await message.channel.fetch_message(message.reference.message_id)
+                # Check if the original message has an image attachment
+                if original_message.attachments and "image" in original_message.attachments[0].content_type:
+                    # If so, use our new dedicated handler and stop processing
+                    return await self._handle_image_reply(message, original_message)
+                
             # --- FIX: Added 'is_autonomous' to track the reason for responding ---
             should_respond, is_direct_reply, is_autonomous = False, False, False
             if message.reference:
@@ -453,6 +498,7 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
         embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
         embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
+        embed.add_field(name="!horoscope [sign]", value="I'll look at the sky and tell ya what's up. It's probably chaos.\n*Example: `!horoscope gemini`*", inline=False)
         embed.add_field(name="!propose [@user]", value="Get down on one knee and propose to someone special.", inline=False)
         embed.add_field(name="!marry [@user]", value="Accept a proposal from someone who just proposed to you.", inline=False)
         embed.add_field(name="!divorce", value="End your current marriage. Ouch.", inline=False)
@@ -536,7 +582,72 @@ class VinnyLogic(commands.Cog):
         except Exception as e:
             sys.stderr.write(f"ERROR: creating weather embed: {e}\n")
             await ctx.send("somethin' went wrong with the damn weather machine.")
+
+# --- NEW: HOROSCOPE COMMAND ---
+
+    @commands.command(name='horoscope')
+    async def horoscope_command(self, ctx, *, sign: str):
+        """Provides a Vinny-fied horoscope for the given zodiac sign."""
+        # --- FIX: Added a dictionary to map signs to emojis ---
+        sign_emojis = {
+            "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋", 
+            "leo": "♌", "virgo": "♍", "libra": "♎", "scorpio": "♏", 
+            "sagittarius": "♐", "capricorn": "♑", "aquarius": "♒", "pisces": "♓"
+        }
         
+        valid_signs = list(sign_emojis.keys())
+        clean_sign = sign.lower()
+
+        if clean_sign not in valid_signs:
+            await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
+            return
+        
+        async with ctx.typing():
+            horoscope_data = await self.bot.get_horoscope(clean_sign)
+            if not horoscope_data:
+                await ctx.send("the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk.")
+                return
+
+            vinnyfied_text = horoscope_data.get('description', "The stars ain't talkin' today.")
+            try:
+                rewrite_prompt = (
+                    f"{self.bot.personality_instruction}\n\n"
+                    f"# --- YOUR TASK ---\n"
+                    f"You must rewrite a boring horoscope into a chaotic, flirty, and slightly unhinged one in your own voice. "
+                    f"The user's sign is **{clean_sign.title()}**. Use the provided data to inform your response, but make it your own. Obey all personality directives (lowercase, typos, etc.).\n\n"
+                    f"## BORING HOROSCOPE DATA:\n"
+                    f"- **Horoscope:** \"{horoscope_data.get('description')}\"\n"
+                    f"- **Today's Mood:** {horoscope_data.get('mood')}\n"
+                    f"- **Lucky Number:** {horoscope_data.get('lucky_number')}\n"
+                    f"- **Lucky Color:** {horoscope_data.get('color')}\n\n"
+                    f"## INSTRUCTIONS:\n"
+                    f"Generate a short, single-paragraph monologue that gives the user their horoscope in your unique, chaotic style. Mention their mood and lucky items."
+                )
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(role='user', parts=[types.Part(text=rewrite_prompt)])],
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                if response.text:
+                    vinnyfied_text = response.text.strip()
+            except Exception as e:
+                sys.stderr.write(f"ERROR: Failed to Vinny-fy the horoscope: {e}\n")
+
+            # --- FIX: Added the emoji to the embed title ---
+            emoji = sign_emojis.get(clean_sign, "✨")
+            embed = discord.Embed(
+                title=f"{emoji} Horoscope for {clean_sign.title()}",
+                description=vinnyfied_text,
+                color=discord.Color.dark_purple()
+            )
+            embed.add_field(name="Today's Mood", value=horoscope_data.get('mood', '¯\\_(ツ)_/¯'), inline=True)
+            embed.add_field(name="Lucky Number", value=horoscope_data.get('lucky_number', '0'), inline=True)
+            embed.add_field(name="Lucky Color", value=horoscope_data.get('color', 'Nothin'), inline=True)
+            embed.set_footer(text="don't blame me if the stars lie. they're drama queens.")
+            embed.timestamp = datetime.datetime.now(ZoneInfo("America/New_York"))
+            
+            await ctx.send(embed=embed)
+
 # vinny knows command
 
     @commands.command(name='vinnyknows')
