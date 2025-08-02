@@ -637,6 +637,8 @@ class VinnyLogic(commands.Cog):
                 description=vinnyfied_text,
                 color=discord.Color.dark_purple()
             )
+
+            embed.set_thumbnail(url="https://i.imgur.com/4laks52.gif")
             embed.set_footer(text="don't blame me if the stars lie. they're drama queens.")
             embed.timestamp = datetime.datetime.now(ZoneInfo("America/New_York"))
             
