@@ -588,7 +588,6 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='horoscope')
     async def horoscope_command(self, ctx, *, sign: str):
         """Provides a Vinny-fied horoscope for the given zodiac sign."""
-        # --- FIX: Added a dictionary to map signs to emojis ---
         sign_emojis = {
             "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋", 
             "leo": "♌", "virgo": "♍", "libra": "♎", "scorpio": "♏", 
@@ -608,20 +607,18 @@ class VinnyLogic(commands.Cog):
                 await ctx.send("the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk.")
                 return
 
-            vinnyfied_text = horoscope_data.get('description', "The stars ain't talkin' today.")
+            # The new API nests the description under "horoscope_data"
+            boring_horoscope = horoscope_data.get('horoscope_data', "The stars ain't talkin' today.")
+            vinnyfied_text = boring_horoscope
             try:
+                # The prompt is simpler now since we have less data
                 rewrite_prompt = (
                     f"{self.bot.personality_instruction}\n\n"
                     f"# --- YOUR TASK ---\n"
                     f"You must rewrite a boring horoscope into a chaotic, flirty, and slightly unhinged one in your own voice. "
-                    f"The user's sign is **{clean_sign.title()}**. Use the provided data to inform your response, but make it your own. Obey all personality directives (lowercase, typos, etc.).\n\n"
-                    f"## BORING HOROSCOPE DATA:\n"
-                    f"- **Horoscope:** \"{horoscope_data.get('description')}\"\n"
-                    f"- **Today's Mood:** {horoscope_data.get('mood')}\n"
-                    f"- **Lucky Number:** {horoscope_data.get('lucky_number')}\n"
-                    f"- **Lucky Color:** {horoscope_data.get('color')}\n\n"
+                    f"The user's sign is **{clean_sign.title()}**. The boring horoscope is: \"{boring_horoscope}\"\n\n"
                     f"## INSTRUCTIONS:\n"
-                    f"Generate a short, single-paragraph monologue that gives the user their horoscope in your unique, chaotic style. Mention their mood and lucky items."
+                    f"Generate a short, single-paragraph monologue that gives the user their horoscope in your unique, chaotic style. Do not just repeat the horoscope; interpret it with your personality."
                 )
                 response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
@@ -633,16 +630,13 @@ class VinnyLogic(commands.Cog):
             except Exception as e:
                 sys.stderr.write(f"ERROR: Failed to Vinny-fy the horoscope: {e}\n")
 
-            # --- FIX: Added the emoji to the embed title ---
             emoji = sign_emojis.get(clean_sign, "✨")
+            # We removed the extra fields because the new API doesn't provide them
             embed = discord.Embed(
                 title=f"{emoji} Horoscope for {clean_sign.title()}",
                 description=vinnyfied_text,
                 color=discord.Color.dark_purple()
             )
-            embed.add_field(name="Today's Mood", value=horoscope_data.get('mood', '¯\\_(ツ)_/¯'), inline=True)
-            embed.add_field(name="Lucky Number", value=horoscope_data.get('lucky_number', '0'), inline=True)
-            embed.add_field(name="Lucky Color", value=horoscope_data.get('color', 'Nothin'), inline=True)
             embed.set_footer(text="don't blame me if the stars lie. they're drama queens.")
             embed.timestamp = datetime.datetime.now(ZoneInfo("America/New_York"))
             
