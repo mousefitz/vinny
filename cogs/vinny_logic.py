@@ -268,11 +268,11 @@ class VinnyLogic(commands.Cog):
         summary_prompt = (
             f"{self.bot.personality_instruction}\n\n"
             f"# --- YOUR TASK ---\n"
-            f"A user, '{message.author.display_name}', is asking what you know about '{target_user.display_name}'. Your task is to summarize the facts you've learned about them in a creative, chaotic, or flirty way. Obey all your personality directives.\n\n"
+            f"You are being asked what you know about '{target_user.display_name}'. Your only task is to summarize the facts listed below about them in a creative, chaotic, or flirty way. Do not mention any other user. Obey all your personality directives.\n\n"
             f"## FACTS I KNOW ABOUT {target_user.display_name}:\n"
             f"{facts_string}\n\n"
             f"## INSTRUCTIONS:\n"
-            f"1.  Read the facts provided above.\n"
+            f"1.  Read ONLY the facts provided above about {target_user.display_name}.\n"
             f"2.  Weave them together into a short, lowercase, typo-ridden monologue.\n"
             f"3.  Do not just list the facts. Interpret them, connect them, or be confused by them in your own unique voice."
         )
