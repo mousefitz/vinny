@@ -119,6 +119,13 @@ class VinnyLogic(commands.Cog):
 
     async def _handle_reply(self, message: discord.Message):
         try:
+            # --- FIX: Check for a stored nickname first ---
+            user_id = str(message.author.id)
+            user_name_to_use = await self.bot.get_user_nickname(user_id)
+            if not user_name_to_use:
+                user_name_to_use = message.author.display_name
+            # --- END FIX ---
+
             replied_to_message = await message.channel.fetch_message(message.reference.message_id)
             prompt_parts = []
             config = self.bot.GEMINI_TEXT_CONFIG
@@ -126,10 +133,12 @@ class VinnyLogic(commands.Cog):
                 attachment = replied_to_message.attachments[0]
                 image_bytes = await attachment.read()
                 prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
-                prompt_parts.append(types.Part(text=(f"User '{message.author.display_name}' replied with: \"{message.content}\" to an older message with an image.")))
+                # --- FIX: Use the potentially overridden nickname ---
+                prompt_parts.append(types.Part(text=(f"User '{user_name_to_use}' replied with: \"{message.content}\" to an older message with an image.")))
                 config = None
             else:
-                prompt_parts.append(types.Part(text=(f"User '{message.author.display_name}' replied with: \"{message.content}\" to an older message which said: \"{replied_to_message.content}\".")))
+                # --- FIX: Use the potentially overridden nickname ---
+                prompt_parts.append(types.Part(text=(f"User '{user_name_to_use}' replied with: \"{message.content}\" to an older message which said: \"{replied_to_message.content}\".")))
             
             dynamic_persona_injection = f"current mood is '{self.bot.current_mood}'."
             final_reply_prompt_parts = [types.Part(text=f"{self.bot.personality_instruction}\n{dynamic_persona_injection}"), *prompt_parts]
