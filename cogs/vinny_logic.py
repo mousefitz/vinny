@@ -412,7 +412,24 @@ class VinnyLogic(commands.Cog):
                 return await self._handle_image_request(message, prompt_text)
             # --- END OF FIX ---
             
-            if any(cleaned_actions.startswith(kw) for kw in ["tag", "ping"]): return await self.find_and_tag_member(message, cleaned_actions)
+            # --- NEW: Upgraded logic for the tag/ping command ---
+            tag_keywords = ["tag", "ping"]
+            for keyword in tag_keywords:
+                if cleaned_actions.startswith(keyword + " "):
+                    name_to_find = ""
+                    # The most reliable way to find a user is to check for an @mention first.
+                    if message.mentions:
+                        name_to_find = message.mentions[0].display_name
+                    else:
+                        # If no mention, parse the name from the string (e.g., "tag potato and say hi").
+                        full_argument = cleaned_actions[len(keyword)+1:].strip()
+                        # The name will be the first "word" in the argument.
+                        name_to_find = full_argument.split(' ')[0]
+                    
+                    # Now we call the function with the correctly parsed name.
+                    return await self.find_and_tag_member(message, name_to_find)
+            # --- END NEW ---
+
             if "what's my name" in message.content.lower():
                 name = await self.bot.get_user_nickname(str(message.author.id))
                 return await message.channel.send(f"they call ya {name}, right?" if name else "i got nothin'.")
@@ -430,8 +447,6 @@ class VinnyLogic(commands.Cog):
             self.bot.current_mood = random.choice([m for m in self.bot.MOODS if m != self.bot.current_mood])
             self.bot.last_mood_change_time = datetime.datetime.now()
 
-    # vinny/cogs/vinny_logic.py
-
     async def find_and_tag_member(self, message, user_name: str):
         if not message.guild:
             await message.channel.send("eh, who am i supposed to tag out here? this is a private chat, pal.")
@@ -443,16 +458,23 @@ class VinnyLogic(commands.Cog):
         if target_member:
             response_text = f"aight, here they are: {target_member.mention}"
             try:
+                # Get the original, full command from the message object.
+                original_command = message.content
+
+                # This new prompt gives the AI the FULL context of your command.
                 tagging_prompt = (
                     f"{self.bot.personality_instruction}\n\n"
-                    f"The user '{message.author.display_name}' asked you to tag the user '{target_member.display_name}'. You found them. "
-                    f"Generate a short, in-character response to announce that you are tagging them. Be sassy, cranky, or flirty about it."
+                    f"# --- YOUR TASK ---\n"
+                    f"A user has given you the command: \"{original_command}\".\n"
+                    f"You have already identified the user to tag: '{target_member.display_name}'.\n"
+                    f"Your task is to follow the user's instructions and generate an in-character response that includes the tag for '{target_member.display_name}'. Obey all your personality directives."
                 )
                 api_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(role='user', parts=[types.Part(text=tagging_prompt)])],
                     config=self.bot.GEMINI_TEXT_CONFIG
                 )
+                # We append the mention to ensure the user is actually tagged in the final response.
                 if api_response.text:
                     response_text = f"{api_response.text.strip()} {target_member.mention}"
             except Exception as e:
