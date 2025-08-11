@@ -467,23 +467,32 @@ class VinnyLogic(commands.Cog):
         if target_member:
             response_text = f"aight, here they are: {target_member.mention}"
             try:
-                # Get the original, full command from the message object.
                 original_command = message.content
+                
+                # --- FIX: Fetch the target's nickname ---
+                target_nickname = await self.bot.get_user_nickname(str(target_member.id))
+                
+                # Create a string with all the name info we have for the AI
+                name_info = f"Their display name is '{target_member.display_name}'."
+                if target_nickname:
+                    name_info += f" You know them as '{target_nickname}'."
 
-                # This new prompt gives the AI the FULL context of your command.
+                # --- FIX: A much more creative and context-aware prompt ---
                 tagging_prompt = (
                     f"{self.bot.personality_instruction}\n\n"
                     f"# --- YOUR TASK ---\n"
-                    f"A user has given you the command: \"{original_command}\".\n"
-                    f"You have already identified the user to tag: '{target_member.display_name}'.\n"
-                    f"Your task is to follow the user's instructions and generate an in-character response that includes the tag for '{target_member.display_name}'. Obey all your personality directives."
+                    f"You need to act on the user's command: \"{original_command}\".\n\n"
+                    f"## CONTEXT:\n"
+                    f"- The user you need to tag is: {name_info}\n"
+                    f"- **IMPORTANT**: When you speak about this person, you MUST use their nickname ('{target_nickname}') if you know one.\n\n"
+                    f"## INSTRUCTIONS:\n"
+                    f"Generate a natural, in-character response that creatively fulfills the user's request. Weave the command into your normal chaotic, flirty, or cranky personality. Do not just robotically repeat what the user said; make it your own."
                 )
                 api_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(role='user', parts=[types.Part(text=tagging_prompt)])],
                     config=self.bot.GEMINI_TEXT_CONFIG
                 )
-                # We append the mention to ensure the user is actually tagged in the final response.
                 if api_response.text:
                     response_text = f"{api_response.text.strip()} {target_member.mention}"
             except Exception as e:
