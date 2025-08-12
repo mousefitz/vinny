@@ -461,15 +461,8 @@ class VinnyLogic(commands.Cog):
             self.bot.current_mood = random.choice([m for m in self.bot.MOODS if m != self.bot.current_mood])
             self.bot.last_mood_change_time = datetime.datetime.now()
 
-    # Add the new 'times' parameter with a default value of 1
+    # The 'times' parameter is now used as context for the AI, not for a loop
     async def find_and_tag_member(self, message, user_name: str, times: int = 1):
-        # --- NEW: Add safety limits ---
-        # Set a reasonable maximum to prevent spam
-        MAX_TAGS = 5
-        if times > MAX_TAGS:
-            await message.channel.send(f"whoa there, buddy. {times} times? you tryna get me banned? i'll do it {MAX_TAGS} times, take it or leave it.")
-            times = MAX_TAGS
-
         if not message.guild:
             await message.channel.send("eh, who am i supposed to tag out here? this is a private chat, pal.")
             return
@@ -479,7 +472,6 @@ class VinnyLogic(commands.Cog):
             target_member = await self.bot.find_user_by_vinny_name(message.guild, user_name)
         
         if target_member:
-            # We only generate the text once to avoid spamming the AI API
             response_text = f"aight, here they are: {target_member.mention}"
             try:
                 original_command = message.content
@@ -487,15 +479,18 @@ class VinnyLogic(commands.Cog):
                 name_info = f"Their display name is '{target_member.display_name}'."
                 if target_nickname:
                     name_info += f" You know them as '{target_nickname}'."
+
+                # --- FIX: A much smarter prompt that tells the AI to be creative with the repetition ---
                 tagging_prompt = (
                     f"{self.bot.personality_instruction}\n\n"
                     f"# --- YOUR TASK ---\n"
-                    f"You need to act on the user's command: \"{original_command}\".\n\n"
+                    f"A user has given you the command: \"{original_command}\". This is a complex request. You must fulfill all parts of it creatively.\n\n"
                     f"## CONTEXT:\n"
-                    f"- The user you need to tag is: {name_info}\n"
-                    f"- **IMPORTANT**: When you speak about this person, you MUST use their nickname ('{target_nickname}') if you know one.\n\n"
+                    f"- The user you need to tag is: {name_info}.\n"
+                    f"- Their command includes a request to tag this person **{times} times**.\n"
+                    f"- **IMPORTANT**: Do NOT send {times} separate messages. Instead, create ONE SINGLE MESSAGE that is extra chaotic or repetitive to capture the spirit of their request. You can tag the user multiple times *within* this single message.\n\n"
                     f"## INSTRUCTIONS:\n"
-                    f"Generate a natural, in-character response that creatively fulfills the user's request. Weave the command into your normal chaotic, flirty, or cranky personality. Do not just robotically repeat what the user said; make it your own."
+                    f"Generate a single, natural, in-character response that creatively fulfills the user's entire request. Use their nickname ('{target_nickname}') if you know one. Weave the full command into your normal personality."
                 )
                 api_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
@@ -503,15 +498,13 @@ class VinnyLogic(commands.Cog):
                     config=self.bot.GEMINI_TEXT_CONFIG
                 )
                 if api_response.text:
+                    # The mention is still appended to ensure they are pinged.
                     response_text = f"{api_response.text.strip()} {target_member.mention}"
             except Exception as e:
                 sys.stderr.write(f"ERROR: Failed to generate creative tag comment: {e}\n")
             
-            # --- NEW: Loop to send the message multiple times with a delay ---
-            for i in range(times):
-                await message.channel.send(response_text)
-                # Add a 2-second delay between messages to avoid rate limits
-                await asyncio.sleep(2)
+            # --- FIX: The loop is removed. We now only send one message. ---
+            await message.channel.send(response_text)
         else:
             await message.channel.send(f"who? i looked all over this joint, couldn't find anyone named '{user_name}'.")
 
