@@ -463,6 +463,11 @@ class VinnyLogic(commands.Cog):
 
     # The 'times' parameter is now used as context for the AI, not for a loop
     async def find_and_tag_member(self, message, user_name: str, times: int = 1):
+        MAX_TAGS = 5
+        if times > MAX_TAGS:
+            await message.channel.send(f"whoa there, buddy. {times} times? you tryna get me banned? i'll do it {MAX_TAGS} times, take it or leave it.")
+            times = MAX_TAGS
+
         if not message.guild:
             await message.channel.send("eh, who am i supposed to tag out here? this is a private chat, pal.")
             return
@@ -472,39 +477,60 @@ class VinnyLogic(commands.Cog):
             target_member = await self.bot.find_user_by_vinny_name(message.guild, user_name)
         
         if target_member:
-            response_text = f"aight, here they are: {target_member.mention}"
             try:
                 original_command = message.content
                 target_nickname = await self.bot.get_user_nickname(str(target_member.id))
+                
                 name_info = f"Their display name is '{target_member.display_name}'."
                 if target_nickname:
                     name_info += f" You know them as '{target_nickname}'."
 
-                # --- FIX: A much smarter prompt that tells the AI to be creative with the repetition ---
+                # --- NEW: A prompt that asks the AI for a JSON list of messages ---
                 tagging_prompt = (
                     f"{self.bot.personality_instruction}\n\n"
                     f"# --- YOUR TASK ---\n"
-                    f"A user has given you the command: \"{original_command}\". This is a complex request. You must fulfill all parts of it creatively.\n\n"
+                    f"A user has given you the command: \"{original_command}\". This requires you to send multiple unique messages.\n\n"
                     f"## CONTEXT:\n"
-                    f"- The user you need to tag is: {name_info}.\n"
-                    f"- Their command includes a request to tag this person **{times} times**.\n"
-                    f"- **IMPORTANT**: Do NOT send {times} separate messages. Instead, create ONE SINGLE MESSAGE that is extra chaotic or repetitive to capture the spirit of their request. You can tag the user multiple times *within* this single message.\n\n"
+                    f"- You need to tag: {name_info}.\n"
+                    f"- The user wants you to do this **{times} times** in separate messages.\n"
+                    f"- **IMPORTANT**: When you speak about this person, you MUST use their nickname ('{target_nickname}') if you know one.\n\n"
                     f"## INSTRUCTIONS:\n"
-                    f"Generate a single, natural, in-character response that creatively fulfills the user's entire request. Use their nickname ('{target_nickname}') if you know one. Weave the full command into your normal personality."
+                    f"Generate a JSON object with a single key, \"messages\", which holds a list of **{times}** strings. Each string must be a short, unique, in-character message that fulfills the user's request. Do not add the user's @mention to the strings; it will be added automatically.\n\n"
+                    f"### EXAMPLE OUTPUT FORMAT:\n"
+                    f"```json\n"
+                    f"{{\n"
+                    f'    "messages": ["message one", "message two", "message three"]\n'
+                    f"}}\n"
+                    f"```"
                 )
+                
                 api_response = await self.bot.gemini_client.aio.models.generate_content(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(role='user', parts=[types.Part(text=tagging_prompt)])],
                     config=self.bot.GEMINI_TEXT_CONFIG
                 )
+
                 if api_response.text:
-                    # The mention is still appended to ensure they are pinged.
-                    response_text = f"{api_response.text.strip()} {target_member.mention}"
+                    # Extract the JSON from the AI's response
+                    json_string_match = re.search(r'```json\s*(\{.*?\})\s*```', api_response.text, re.DOTALL)
+                    if not json_string_match:
+                         json_string_match = re.search(r'(\{.*?\})', api_response.text, re.DOTALL)
+
+                    message_data = json.loads(json_string_match.group(1))
+                    messages_to_send = message_data.get("messages", [])
+
+                    # Loop through the list of messages and send each one
+                    for msg_text in messages_to_send:
+                        await message.channel.send(f"{msg_text.strip()} {target_member.mention}")
+                        await asyncio.sleep(2)  # Keep the 2-second delay for safety
+                    
+                    return # Stop the function after the loop is done
+
             except Exception as e:
-                sys.stderr.write(f"ERROR: Failed to generate creative tag comment: {e}\n")
-            
-            # --- FIX: The loop is removed. We now only send one message. ---
-            await message.channel.send(response_text)
+                sys.stderr.write(f"ERROR: Failed to generate or parse multi-tag response: {e}\n")
+                # Fallback message if the AI fails to generate a valid list
+                await message.channel.send(f"my brain shorted out tryin' to do all that. here, i'll just do it once. hey {target_member.mention}.")
+
         else:
             await message.channel.send(f"who? i looked all over this joint, couldn't find anyone named '{user_name}'.")
 
