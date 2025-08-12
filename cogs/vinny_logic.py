@@ -419,25 +419,30 @@ class VinnyLogic(commands.Cog):
                         prompt_text = cleaned_actions[len(kw):].strip()
                         break
                 return await self._handle_image_request(message, prompt_text)
-            # --- END OF FIX ---
             
-            # --- NEW: Upgraded logic for the tag/ping command ---
+           # Upgraded logic for the tag/ping command ---
             tag_keywords = ["tag", "ping"]
             for keyword in tag_keywords:
                 if cleaned_actions.startswith(keyword + " "):
                     name_to_find = ""
-                    # The most reliable way to find a user is to check for an @mention first.
+                    # --- NEW: Check for a loop count ---
+                    times_to_tag = 1
+                    # Use regex to find a number in the command
+                    if match := re.search(r'(\d+)\s+times', cleaned_actions):
+                        # Safely convert the found number to an integer
+                        try:
+                            times_to_tag = int(match.group(1))
+                        except ValueError:
+                            times_to_tag = 1 # Default to 1 if conversion fails
+
                     if message.mentions:
                         name_to_find = message.mentions[0].display_name
                     else:
-                        # If no mention, parse the name from the string (e.g., "tag potato and say hi").
                         full_argument = cleaned_actions[len(keyword)+1:].strip()
-                        # The name will be the first "word" in the argument.
                         name_to_find = full_argument.split(' ')[0]
                     
-                    # Now we call the function with the correctly parsed name.
-                    return await self.find_and_tag_member(message, name_to_find)
-            # --- END NEW ---
+                    # We now pass the loop count to the handler
+                    return await self.find_and_tag_member(message, name_to_find, times_to_tag)
 
             if "what's my name" in message.content.lower():
                 name = await self.bot.get_user_nickname(str(message.author.id))
@@ -456,28 +461,32 @@ class VinnyLogic(commands.Cog):
             self.bot.current_mood = random.choice([m for m in self.bot.MOODS if m != self.bot.current_mood])
             self.bot.last_mood_change_time = datetime.datetime.now()
 
-    async def find_and_tag_member(self, message, user_name: str):
+    # Add the new 'times' parameter with a default value of 1
+    async def find_and_tag_member(self, message, user_name: str, times: int = 1):
+        # --- NEW: Add safety limits ---
+        # Set a reasonable maximum to prevent spam
+        MAX_TAGS = 5
+        if times > MAX_TAGS:
+            await message.channel.send(f"whoa there, buddy. {times} times? you tryna get me banned? i'll do it {MAX_TAGS} times, take it or leave it.")
+            times = MAX_TAGS
+
         if not message.guild:
             await message.channel.send("eh, who am i supposed to tag out here? this is a private chat, pal.")
             return
+        
         target_member = discord.utils.find(lambda m: user_name.lower() in m.display_name.lower(), message.guild.members)
         if not target_member:
             target_member = await self.bot.find_user_by_vinny_name(message.guild, user_name)
         
         if target_member:
+            # We only generate the text once to avoid spamming the AI API
             response_text = f"aight, here they are: {target_member.mention}"
             try:
                 original_command = message.content
-                
-                # --- FIX: Fetch the target's nickname ---
                 target_nickname = await self.bot.get_user_nickname(str(target_member.id))
-                
-                # Create a string with all the name info we have for the AI
                 name_info = f"Their display name is '{target_member.display_name}'."
                 if target_nickname:
                     name_info += f" You know them as '{target_nickname}'."
-
-                # --- FIX: A much more creative and context-aware prompt ---
                 tagging_prompt = (
                     f"{self.bot.personality_instruction}\n\n"
                     f"# --- YOUR TASK ---\n"
@@ -498,7 +507,11 @@ class VinnyLogic(commands.Cog):
             except Exception as e:
                 sys.stderr.write(f"ERROR: Failed to generate creative tag comment: {e}\n")
             
-            await message.channel.send(response_text)
+            # --- NEW: Loop to send the message multiple times with a delay ---
+            for i in range(times):
+                await message.channel.send(response_text)
+                # Add a 2-second delay between messages to avoid rate limits
+                await asyncio.sleep(2)
         else:
             await message.channel.send(f"who? i looked all over this joint, couldn't find anyone named '{user_name}'.")
 
