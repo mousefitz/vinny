@@ -364,6 +364,25 @@ class VinnyBot(commands.Bot):
             return True
         except Exception as e: return False
 
+# --- NEW: Function to delete a single fact from a user's profile ---
+    async def delete_user_profile_fact(self, user_id: str, guild_id: str | None, fact_key: str):
+        """Deletes a specific key (fact) from a user's profile."""
+        if not self.db or not fact_key: 
+            return False
+        
+        # Determine the correct path (server-specific or global)
+        path = f"artifacts/{self.APP_ID}/servers/{guild_id}/user_profiles" if guild_id else f"artifacts/{self.APP_ID}/global_user_profiles"
+        profile_ref = self.db.collection(path).document(user_id)
+
+        try:
+            # Use firestore.DELETE_FIELD to remove the specific key
+            await self.loop.run_in_executor(None, lambda: profile_ref.update({fact_key: firestore.DELETE_FIELD}))
+            return True
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to delete fact '{fact_key}' for user '{user_id}': {e}\n")
+            return False
+# --- END NEW FUNCTION ---
+
     def split_message(self, content, char_limit=1900):
         if len(content) <= char_limit: return [content]
         chunks = []

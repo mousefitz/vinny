@@ -262,18 +262,16 @@ class VinnyLogic(commands.Cog):
         user_id = str(target_user.id)
         guild_id = str(message.guild.id) if message.guild else None
         
-        # 1. Fetch ONLY the target_user's specific profile
         user_profile = await self.bot.get_user_profile(user_id, guild_id)
 
         if not user_profile:
             await message.channel.send(f"about {target_user.display_name}? i got nothin'. a blank canvas. kinda intimidatin', actually.")
             return
 
-        # 2. Convert the profile dictionary into a clean list of facts for the AI
         facts_list = [f"- {key.replace('_', ' ')} is {value}" for key, value in user_profile.items()]
         facts_string = "\n".join(facts_list)
 
-        # 3. Use a targeted prompt that focuses ONLY on summarizing these facts
+        # --- FIX: A simpler, more direct prompt to prevent context bleed ---
         summary_prompt = (
             f"{self.bot.personality_instruction}\n\n"
             f"# --- YOUR TASK ---\n"
@@ -344,11 +342,94 @@ class VinnyLogic(commands.Cog):
             sys.stderr.write(f"ERROR: Failed to generate dynamic summary for server knowledge request: {e}\n")
             await message.channel.send("my head's a real mess. i've been listenin', but it's all just noise right now.")
 
+# --- NEW: Handler for user corrections ---
+    async def _handle_correction(self, message: discord.Message):
+        """Handles when a user corrects a fact Vinny has stated about them."""
+        user_id = str(message.author.id)
+        guild_id = str(message.guild.id) if message.guild else None
+        
+        # 1. Ask the AI to identify the incorrect fact from the user's message.
+        correction_prompt = (
+            f"A user is correcting a fact about themselves. Their message is: \"{message.content}\".\n"
+            f"Your task is to identify the specific fact they are correcting. For example, if they say 'I'm not bald', the fact is 'is bald'. If they say 'I don't have a cat', the fact is 'has a cat'.\n"
+            f"Please return a JSON object with a single key, \"fact_to_remove\", containing the fact you identified.\n\n"
+            f"Example:\n"
+            f"User message: 'Vinny, that's not true, my favorite color is red, not blue.'\n"
+            f"Output: {{\"fact_to_remove\": \"favorite color is blue\"}}"
+        )
+
+        try:
+            async with message.channel.typing():
+                # First API call to identify the fact
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME, contents=[types.Part(text=correction_prompt)], config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                
+                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                if not json_match:
+                    await message.channel.send("my brain's all fuzzy, i didn't get what i was wrong about.")
+                    return
+
+                fact_data = json.loads(json_match.group(0))
+                fact_to_remove = fact_data.get("fact_to_remove")
+
+                if not fact_to_remove:
+                    await message.channel.send("huh? what was i wrong about? try bein more specific, pal.")
+                    return
+
+                # 2. Ask the AI to map the natural language fact to a database key.
+                user_profile = await self.bot.get_user_profile(user_id, guild_id)
+                if not user_profile:
+                    await message.channel.send("i don't even know anything about you to be wrong about!")
+                    return
+
+                key_mapping_prompt = (
+                    f"A user's profile is stored as a JSON object. I need to find the key that corresponds to the fact: \"{fact_to_remove}\".\n"
+                    f"Here is the user's current profile data: {json.dumps(user_profile, indent=2)}\n"
+                    f"Based on the data, which key is the most likely match for the fact I need to remove? Return a JSON object with a single key, \"database_key\".\n\n"
+                    f"Example:\n"
+                    f"Fact: 'is a painter'\n"
+                    f"Profile: {{\"occupation\": \"a painter\"}}\n"
+                    f"Output: {{\"database_key\": \"occupation\"}}"
+                )
+
+                # Second API call to get the database key
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME, contents=[types.Part(text=key_mapping_prompt)], config=self.bot.GEMINI_TEXT_CONFIG
+                )
+
+                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                if not json_match: return
+
+                key_data = json.loads(json_match.group(0))
+                db_key = key_data.get("database_key")
+
+                if not db_key or db_key not in user_profile:
+                    await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird.")
+                    return
+
+                # 3. Delete the fact and confirm with the user.
+                if await self.bot.delete_user_profile_fact(user_id, guild_id, db_key):
+                    await message.channel.send(f"aight, my mistake. i'll forget that whole '{db_key.replace('_', ' ')}' thing. salute.")
+                else:
+                    await message.channel.send("i tried to forget it, but the memory is stuck in there good. damn.")
+
+        except Exception as e:
+            sys.stderr.write(f"ERROR in _handle_correction: {e}\n")
+            await message.channel.send("my head's poundin'. somethin went wrong tryin to fix my memory.")
+# --- END NEW HANDLER ---
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
+            # --- NEW: Check for user corrections ---
+            correction_keywords = ["i'm not", "i am not", "i don't", "i do not", "that's not true", "that isn't true"]
+            if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in ["vinny", "vincenzo"]):
+                if any(keyword in message.content.lower() for keyword in correction_keywords):
+                    # If it looks like a correction, call the dedicated handler and stop processing.
+                    return await self._handle_correction(message)
             # --- NEW: Check for image reply-tags first ---
             if message.reference and self.bot.user.mentioned_in(message):
                 original_message = await message.channel.fetch_message(message.reference.message_id)
