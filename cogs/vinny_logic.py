@@ -245,8 +245,13 @@ class VinnyLogic(commands.Cog):
                     history.append(types.Content(parts=[types.Part(function_response=types.FunctionResponse(name='Google Search', response={'result': tool_response}))]))
                     response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
                 
-                if response.text and response.text.strip().lower() != '[silence]':
-                    for chunk in self.bot.split_message(response.text): await message.channel.send(chunk.lower())
+                # --- FIX: A more robust check to ensure the response is not empty or just whitespace ---
+                if response.text:
+                    cleaned_response = response.text.strip()
+                    if cleaned_response and cleaned_response.lower() != '[silence]':
+                        for chunk in self.bot.split_message(cleaned_response):
+                            await message.channel.send(chunk.lower())
+                # --- END FIX ---
                 
                 if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
                     if extracted_facts := await extract_facts_from_message(self.bot, message.content):
