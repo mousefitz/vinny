@@ -90,8 +90,8 @@ class VinnyBot(commands.Bot):
 
         # --- Initialize API Clients ---
         print("Initializing API clients...")
-        # This correctly uses your primary, billable API key
-        self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
+        genai.configure(api_key=self.GEMINI_API_KEY)
+        self.gemini_client = genai
         self.http_session = None
 
         # --- Load Personality ---
@@ -128,7 +128,7 @@ class VinnyBot(commands.Bot):
                 types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT
             ]
         ]
-        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
+        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfiguration(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
         
         # --- Rate Limiting ---
         self.TEXT_GENERATION_LIMIT = 1490
@@ -293,26 +293,20 @@ class VinnyBot(commands.Bot):
         elif "mist" in weather_main or "fog" in weather_main or "haze" in weather_main: return "🌫️"
         else: return "🌎"
 
-# --- NEW: HOROSCOPE FUNCTION (UPDATED) ---
     async def get_horoscope(self, sign: str):
-        """Fetches daily horoscope data from a new, reliable API."""
         if not self.http_session: return None
-        # This API uses a GET request
         url = "https://horoscope-app-api.vercel.app/api/v1/get-horoscope/daily"
         params = {"sign": sign.lower(), "day": "today"}
         try:
             async with self.http_session.get(url, params=params) as response:
                 if response.status == 200:
                     data = await response.json()
-                    # Check the new response structure
                     if data and data.get("status") and "data" in data:
-                        # This API only provides the date and description, so we'll return those.
                         return data["data"]
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to fetch horoscope data: {e}\n")
         return None
 
-#fix for merge bug
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: 
             sys.stderr.write("ERROR: Firestore database not initialized. Cannot save fact.\n")
@@ -326,12 +320,10 @@ class VinnyBot(commands.Bot):
 
         try:
             profile_ref = self.db.collection(path).document(user_id)
-            # FIX: Wrap the database call in a lambda to correctly pass the 'merge' argument
             await self.loop.run_in_executor(None, lambda: profile_ref.set(data_to_save, merge=True))
             sys.stderr.write("DEBUG: Firestore save successful.\n")
             return True
         except Exception as e:
-            # This will print the exact, detailed error to your Render logs
             sys.stderr.write(f"CRITICAL SAVE FAILURE: An exception occurred while saving to Firestore.\n")
             sys.stderr.write(f"--> Path: {path}\n")
             sys.stderr.write(f"--> UserID: {user_id}\n")
@@ -354,7 +346,7 @@ class VinnyBot(commands.Bot):
                 doc = await self.loop.run_in_executor(None, self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/user_profiles").document(user_id).get)
                 if doc.exists: server_profile = doc.to_dict()
             except Exception as e: pass
-        return global_profile | server_profile
+        return {**global_profile, **server_profile}
 
     async def delete_user_profile(self, user_id: str, guild_id: str):
         if not self.db: return False
@@ -363,39 +355,31 @@ class VinnyBot(commands.Bot):
             return True
         except Exception as e: return False
 
-# --- NEW: Function to delete a single fact from a user's profile ---
     async def delete_user_profile_fact(self, user_id: str, guild_id: str | None, fact_key: str):
-        """Deletes a specific key (fact) from a user's profile."""
         if not self.db or not fact_key: 
             return False
         
-        # Determine the correct path (server-specific or global)
         path = f"artifacts/{self.APP_ID}/servers/{guild_id}/user_profiles" if guild_id else f"artifacts/{self.APP_ID}/global_user_profiles"
         profile_ref = self.db.collection(path).document(user_id)
 
         try:
-            # Use firestore.DELETE_FIELD to remove the specific key
             await self.loop.run_in_executor(None, lambda: profile_ref.update({fact_key: firestore.DELETE_FIELD}))
             return True
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to delete fact '{fact_key}' for user '{user_id}': {e}\n")
             return False
-# --- END NEW FUNCTION ---
 
     def split_message(self, content, char_limit=1900):
         if len(content) <= char_limit: return [content]
         chunks = []
-        for chunk in content.split('\n'):
-            if len(chunk) > char_limit:
-                words = chunk.split(' ')
-                new_chunk = ""
-                for word in words:
-                    if len(new_chunk) + len(word) + 1 > char_limit:
-                        chunks.append(new_chunk)
-                        new_chunk = word
-                    else: new_chunk += f" {word}" if new_chunk else word
-                if new_chunk: chunks.append(new_chunk)
-            else: chunks.append(chunk)
+        current_chunk = ""
+        for line in content.split('\n'):
+            if len(current_chunk) + len(line) + 1 > char_limit:
+                chunks.append(current_chunk)
+                current_chunk = ""
+            current_chunk += line + "\n"
+        if current_chunk:
+            chunks.append(current_chunk)
         return chunks
 
     async def initialize_rate_limiter(self):
@@ -417,15 +401,17 @@ class VinnyBot(commands.Bot):
 
     async def generate_memory_summary(self, messages):
         if not messages or not self.db: return None
-        summary_instruction = ("you are a conversation summarization assistant...")
+        summary_instruction = ("You are a conversation summarization assistant. Your task is to summarize the following conversation snippets. "
+                               "Focus on key topics, questions asked, and resolutions. The output should be a JSON object with two keys: "
+                               "\"summary\" (a concise paragraph) and \"keywords\" (a list of 5-7 important nouns or phrases).")
         summary_prompt = f"{summary_instruction}\n\n...conversation:\n" + "\n".join([f"{msg['author']}: {msg['content']}" for msg in messages])
         try:
-            response = await self.gemini_client.aio.models.generate_content(
-                model=self.MODEL_NAME, contents=[types.Content(parts=[types.Part(text=summary_prompt)])], config=self.GEMINI_TEXT_CONFIG
+            response = await self.gemini_client.generative_models.gemini_pro.generate_content(
+                contents=[types.Content(parts=[types.Part(text=summary_prompt)])], config=self.GEMINI_TEXT_CONFIG
             )
             if response.text:
-                parts = response.text.split("summary:", 1)[1].split("keywords:", 1)
-                return {"summary": parts[0].strip(), "keywords": [k.strip() for k in parts[1].strip('[]').split(',') if k.strip()]}
+                summary_data = json.loads(response.text)
+                return {"summary": summary_data.get("summary", ""), "keywords": summary_data.get("keywords", [])}
         except Exception as e: pass
         return None
 
@@ -441,15 +427,12 @@ class VinnyBot(commands.Bot):
         relevant = [doc for doc in docs if any(qk.lower() in (dk.lower() for dk in doc.get("keywords", [])) or qk.lower() in doc.get("summary", "").lower() for qk in query_keywords)]
         return sorted(relevant, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
 
-    #new server summary helper function
-
     async def retrieve_server_summaries(self, guild_id: str):
         """Retrieves all conversation summary documents for a given server."""
         if not self.db: return []
         try:
             summaries_ref = self.db.collection(f"artifacts/{self.APP_ID}/servers/{guild_id}/summaries")
             docs = await self.loop.run_in_executor(None, summaries_ref.stream)
-            # Return the full document dictionary for each summary
             return [doc.to_dict() for doc in docs]
         except Exception as e:
             sys.stderr.write(f"ERROR: Failed to retrieve server summaries for guild {guild_id}: {e}\n")
@@ -466,7 +449,7 @@ class VinnyBot(commands.Bot):
         if not self.db: return None
         try:
             doc = await self.loop.run_in_executor(None, self.db.collection(f"artifacts/{self.APP_ID}/global_proposals").document(f"{proposer_id}_to_{recipient_id}").get)
-            if doc.exists and (datetime.datetime.now(datetime.UTC) - doc.to_dict().get("timestamp")) < datetime.timedelta(minutes=5): return doc.to_dict()
+            if doc.exists and (datetime.datetime.now(datetime.UTC) - doc.to_dict().get("timestamp").replace(tzinfo=datetime.timezone.utc)) < datetime.timedelta(minutes=5): return doc.to_dict()
         except Exception: pass
         return None
 
@@ -479,6 +462,7 @@ class VinnyBot(commands.Bot):
             await self.save_user_profile_fact(user2_id, None, "married_to", user1_id)
             await self.save_user_profile_fact(user2_id, None, "marriage_date", date)
             await self.loop.run_in_executor(None, self.db.collection(f"artifacts/{self.APP_ID}/global_proposals").document(f"{user1_id}_to_{user2_id}").delete)
+            await self.loop.run_in_executor(None, self.db.collection(f"artifacts/{self.APP_ID}/global_proposals").document(f"{user2_id}_to_{user1_id}").delete)
             return True
         except Exception: return False
 
