@@ -90,6 +90,7 @@ class VinnyBot(commands.Bot):
 
         # --- Initialize API Clients ---
         print("Initializing API clients...")
+        # This correctly uses your primary, billable API key
         self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
         self.http_session = None
 
