@@ -9,9 +9,10 @@ import sys
 import io
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING, Coroutine
-
 from google.genai import types
 from PIL import Image
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from google.genai import errors
 
 # This block is only processed by type-checkers, not when the code runs.
 if TYPE_CHECKING:
@@ -239,7 +240,7 @@ class VinnyLogic(commands.Cog):
                 if tools:
                     config = types.GenerateContentConfig(
                         tools=tools,
-                        safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY
+                        safety_settings=self.bot.GEMINI_SAFETY_SETTINGS_TEXT_ONLY
                     )
 
                 self.bot.API_CALL_COUNTS["text_generation"] += 1; await self.bot.update_api_count_in_firestore()
