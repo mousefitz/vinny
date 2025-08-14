@@ -78,19 +78,23 @@ class VinnyBot(commands.Bot):
 
         # --- Load Configuration ---
         self.DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+        # FIX: Load BOTH API keys
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # For Vertex AI
+        self.AI_STUDIO_API_KEY = os.getenv("AI_STUDIO_API_KEY") # For Google AI Studio
         self.GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
         self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
         self.FIREBASE_B64 = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_BASE64')
         self.APP_ID = os.getenv('__app_id', 'default-app-id')
 
         # --- Validate Configuration ---
-        if not self.DISCORD_BOT_TOKEN or not self.GEMINI_API_KEY:
-            sys.exit("Error: Essential environment variables (DISCORD_BOT_TOKEN, GEMINI_API_KEY) are not set.")
+        # FIX: Check for the new key as well
+        if not self.DISCORD_BOT_TOKEN or not self.AI_STUDIO_API_KEY:
+            sys.exit("Error: Essential environment variables (DISCORD_BOT_TOKEN, AI_STUDIO_API_KEY) are not set.")
 
         # --- Initialize API Clients ---
         print("Initializing API clients...")
-        self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
+        # FIX: Initialize the client with the AI Studio key for text generation
+        self.gemini_client = genai.Client(api_key=self.AI_STUDIO_API_KEY)
         self.http_session = None
         self.db = None
         self.current_user_id = None 
@@ -104,7 +108,7 @@ class VinnyBot(commands.Bot):
             sys.exit("Error: personality.txt not found. Please create it.")
 
         # --- Bot State & Globals ---
-        self.MODEL_NAME = "gemini-2.5-flash"
+        self.MODEL_NAME = "gemini-1.5-flash"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 10
