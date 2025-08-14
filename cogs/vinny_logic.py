@@ -193,13 +193,19 @@ class VinnyLogic(commands.Cog):
                 profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
                 user_name_to_use = await self.bot.get_user_nickname(user_id) or message.author.display_name
 
-                chat = self.bot.gemini_client.aio.models.start_chat(
-                    history=[
-                        types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
-                        types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
-                    ]
-                )
-                
+                # Reverting to manual history list creation
+                history = [
+                    types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
+                    types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
+                ]
+                # Fetch recent messages for context
+                async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH):
+                    if msg.id == message.id: continue
+                    # Use a generic 'user' role for anyone who isn't the bot
+                    role = "model" if msg.author == self.bot.user else "user"
+                    history.append(types.Content(role=role, parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]))
+                history.reverse() # Order from oldest to newest
+
                 prompt_parts = [types.Part(text=message.content)]
                 config = self.bot.GEMINI_TEXT_CONFIG
                 if message.attachments:
@@ -217,6 +223,9 @@ class VinnyLogic(commands.Cog):
                     final_instruction_text = (f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}. "
                                               f"Facts: {profile_facts_string}. Respond to the message.")
                 
+                # Add the final user message and instructions to the history
+                history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text), *prompt_parts]))
+
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                     tools = [types.Tool(google_search_retrieval=types.GoogleSearchRetrieval())]
                     self.bot.API_CALL_COUNTS["search_grounding"] += 1
@@ -225,15 +234,27 @@ class VinnyLogic(commands.Cog):
                 self.bot.API_CALL_COUNTS["text_generation"] += 1
                 await self.bot.update_api_count_in_firestore()
 
-                response = await chat.send_message(
-                    content=[types.Part(text=final_instruction_text), *prompt_parts],
+                # Using the original, reliable generate_content call
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=history,
                     config=config
                 )
                 
                 while response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
                     function_call = response.candidates[0].content.parts[0].function_call
                     function_response = types.FunctionResponse(name=function_call.name, response=function_call.args)
-                    response = await chat.send_message(content=types.Content(parts=[types.Part(function_response=function_response)]))
+                    
+                    # Append the model's function call and our response to the history for context
+                    history.append(response.candidates[0].content)
+                    history.append(types.Content(parts=[types.Part(function_response=function_response)]))
+                    
+                    # Call the model again with the updated history
+                    response = await self.bot.gemini_client.aio.models.generate_content(
+                        model=self.bot.MODEL_NAME,
+                        contents=history,
+                        config=config
+                    )
                 
                 if response.text and response.text.strip().lower() != '[silence]':
                     await self._send_long_message(message.channel, response.text)
