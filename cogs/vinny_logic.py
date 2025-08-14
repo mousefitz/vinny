@@ -238,8 +238,7 @@ class VinnyLogic(commands.Cog):
                 
                 tools = []
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                    tools = [types.Tool(google_search=types.GoogleSearch())]
-                    self.bot.API_CALL_COUNTS["search_grounding"] += 1
+                    tools = [types.Tool(google_search=types.GoogleSearch())]; self.bot.API_CALL_COUNTS["search_grounding"] += 1
                 
                 if tools:
                     config = types.GenerateContentConfig(
