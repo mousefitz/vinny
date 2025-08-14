@@ -190,6 +190,11 @@ class VinnyLogic(commands.Cog):
             await reply_message.channel.send("my eyes are all blurry, couldn't make out the picture, pal.")
 
     # --- FIX: Add 'is_autonomous' parameter and change the prompt based on it ---
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(errors.ServerError)
+    )
     async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False):
         if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
@@ -233,8 +238,7 @@ class VinnyLogic(commands.Cog):
                 
                 tools = []
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                    # --- FIX: Create the tool by passing it as a named argument ---
-                    tools = [types.Tool(google_search_retrieval=types.GoogleSearchRetrieval())]
+                    tools = [types.Tool(google_search=types.GoogleSearch())]
                     self.bot.API_CALL_COUNTS["search_grounding"] += 1
                 
                 if tools:

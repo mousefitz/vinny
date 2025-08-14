@@ -78,26 +78,20 @@ class VinnyBot(commands.Bot):
 
         # --- Load Configuration ---
         self.DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-        # FIX: Load BOTH API keys
-        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") # For Vertex AI
-        self.AI_STUDIO_API_KEY = os.getenv("AI_STUDIO_API_KEY") # For Google AI Studio
+        self.GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
         self.GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
         self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
         self.FIREBASE_B64 = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_BASE64')
         self.APP_ID = os.getenv('__app_id', 'default-app-id')
 
         # --- Validate Configuration ---
-        # FIX: Check for the new key as well
-        if not self.DISCORD_BOT_TOKEN or not self.AI_STUDIO_API_KEY:
-            sys.exit("Error: Essential environment variables (DISCORD_BOT_TOKEN, AI_STUDIO_API_KEY) are not set.")
+        if not self.DISCORD_BOT_TOKEN or not self.GEMINI_API_KEY:
+            sys.exit("Error: Essential environment variables (DISCORD_BOT_TOKEN, GEMINI_API_KEY) are not set.")
 
         # --- Initialize API Clients ---
         print("Initializing API clients...")
-        # FIX: Initialize the client with the AI Studio key for text generation
-        self.gemini_client = genai.Client(api_key=self.AI_STUDIO_API_KEY)
+        self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
         self.http_session = None
-        self.db = None
-        self.current_user_id = None 
 
         # --- Load Personality ---
         try:
