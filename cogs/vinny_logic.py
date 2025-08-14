@@ -232,13 +232,11 @@ class VinnyLogic(commands.Cog):
                 
                 tools = []
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                    # This uses the correct tool name for the free-tier API
-                    # and will work with the updated google-genai library.
-                    tools = [types.Tool.from_google_search_retrieval(types.GoogleSearchRetrieval())]
+                    # --- FIX: Create the tool by passing it as a named argument ---
+                    tools = [types.Tool(google_search_retrieval=types.GoogleSearchRetrieval())]
                     self.bot.API_CALL_COUNTS["search_grounding"] += 1
                 
                 if tools:
-                    # The config object needs to be rebuilt with the tools
                     config = types.GenerateContentConfig(
                         tools=tools,
                         safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY
