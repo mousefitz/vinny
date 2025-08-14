@@ -242,7 +242,7 @@ class VinnyLogic(commands.Cog):
                     if extracted_facts := await extract_facts_from_message(self.bot, message.content):
                         for key, value in extracted_facts.items(): 
                             await self.bot.save_user_profile_fact(user_id, guild_id, key, value)
-
+    
     async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
         user_id, guild_id = str(target_user.id), str(message.guild.id) if message.guild else None
         user_profile = await self.bot.get_user_profile(user_id, guild_id)
@@ -365,8 +365,6 @@ class VinnyLogic(commands.Cog):
         except Exception as e:
             sys.stderr.write(f"ERROR in _handle_correction: {e}\n")
             await self._send_long_message(message.channel, "my head's poundin'. somethin went wrong tryin to fix my memory.")
-
-    ## --- MAIN EVENT LISTENER --- ##
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -611,7 +609,7 @@ class VinnyLogic(commands.Cog):
         profile = await self.bot.get_user_profile(str(ctx.author.id), None)
         if profile and profile.get("married_to"):
             partner_id = profile.get("married_to")
-            partner_name = (await self.bot.fetch_user(partner_id)).display_name
+            partner_name = (await self.bot.fetch_user(int(partner_id))).display_name
             await self._send_long_message(ctx.channel, f"you're shackled to **{partner_name}**. happened on **{profile.get('marriage_date')}**.")
         else: await self._send_long_message(ctx.channel, "you ain't married to nobody.")
 

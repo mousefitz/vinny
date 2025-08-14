@@ -26,8 +26,6 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # --- Standalone Helper Function to avoid 'self' confusion ---
-# vinny/main.py
-
 async def extract_facts_from_message(bot_instance, user_message: str):
     """
     Analyzes a user message to extract personal facts using the bot's Gemini client.
@@ -127,7 +125,7 @@ class VinnyBot(commands.Bot):
                 types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT
             ]
         ]
-        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfiguration(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
+        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
         
         # --- Rate Limiting ---
         self.TEXT_GENERATION_LIMIT = 1490
@@ -293,6 +291,7 @@ class VinnyBot(commands.Bot):
         else: return "🌎"
 
     async def get_horoscope(self, sign: str):
+        """Fetches daily horoscope data from a new, reliable API."""
         if not self.http_session: return None
         url = "https://horoscope-app-api.vercel.app/api/v1/get-horoscope/daily"
         params = {"sign": sign.lower(), "day": "today"}
@@ -355,6 +354,7 @@ class VinnyBot(commands.Bot):
         except Exception as e: return False
 
     async def delete_user_profile_fact(self, user_id: str, guild_id: str | None, fact_key: str):
+        """Deletes a specific key (fact) from a user's profile."""
         if not self.db or not fact_key: 
             return False
         
@@ -371,14 +371,17 @@ class VinnyBot(commands.Bot):
     def split_message(self, content, char_limit=1900):
         if len(content) <= char_limit: return [content]
         chunks = []
-        current_chunk = ""
-        for line in content.split('\n'):
-            if len(current_chunk) + len(line) + 1 > char_limit:
-                chunks.append(current_chunk)
-                current_chunk = ""
-            current_chunk += line + "\n"
-        if current_chunk:
-            chunks.append(current_chunk)
+        for chunk in content.split('\n'):
+            if len(chunk) > char_limit:
+                words = chunk.split(' ')
+                new_chunk = ""
+                for word in words:
+                    if len(new_chunk) + len(word) + 1 > char_limit:
+                        chunks.append(new_chunk)
+                        new_chunk = word
+                    else: new_chunk += f" {word}" if new_chunk else word
+                if new_chunk: chunks.append(new_chunk)
+            else: chunks.append(chunk)
         return chunks
 
     async def initialize_rate_limiter(self):
@@ -405,13 +408,19 @@ class VinnyBot(commands.Bot):
                                "\"summary\" (a concise paragraph) and \"keywords\" (a list of 5-7 important nouns or phrases).")
         summary_prompt = f"{summary_instruction}\n\n...conversation:\n" + "\n".join([f"{msg['author']}: {msg['content']}" for msg in messages])
         try:
-            response = await self.gemini_client.generative_models.gemini_pro.generate_content(
-                contents=[types.Content(parts=[types.Part(text=summary_prompt)])], config=self.GEMINI_TEXT_CONFIG
+            response = await self.gemini_client.aio.models.generate_content(
+                model=self.MODEL_NAME,
+                contents=[types.Content(parts=[types.Part(text=summary_prompt)])],
+                config=self.GEMINI_TEXT_CONFIG
             )
             if response.text:
-                summary_data = json.loads(response.text)
-                return {"summary": summary_data.get("summary", ""), "keywords": summary_data.get("keywords", [])}
-        except Exception as e: pass
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
+                if json_match:
+                    json_string = json_match.group(1) or json_match.group(2)
+                    summary_data = json.loads(json_string)
+                    return {"summary": summary_data.get("summary", ""), "keywords": summary_data.get("keywords", [])}
+        except Exception as e:
+            sys.stderr.write(f"ERROR: Failed to generate memory summary: {e}\n")
         return None
 
     async def save_memory(self, guild_id: str, summary_data: dict):
