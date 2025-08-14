@@ -238,8 +238,27 @@ class VinnyLogic(commands.Cog):
                 
                 tools = []
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                    tools = [types.Tool(google_search=types.GoogleSearch())]; self.bot.API_CALL_COUNTS["search_grounding"] += 1
-                if tools: config = types.GenerateContentConfig(tools=tools) if config is None else config.__replace__(tools=tools)
+                    # FIX 1: Use the new, correct tool name.
+                    tools = [types.Tool(google_search_retrieval=types.GoogleSearchRetrieval())]
+                    self.bot.API_CALL_COUNTS["search_grounding"] += 1
+
+                if tools: 
+                    config = types.GenerateContentConfig(tools=tools) if config is None else config.__replace__(tools=tools)
+
+                self.bot.API_CALL_COUNTS["text_generation"] += 1
+                await self.bot.update_api_count_in_firestore()
+                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
+                
+                # FIX 2: Update the loop to handle the new tool response correctly.
+                while response.candidates and response.candidates[0].content.parts and response.candidates[0].content.parts[0].function_call:
+                    function_call = response.candidates[0].content.parts[0].function_call
+                    function_response = types.FunctionResponse(
+                        name=function_call.name, # Use the dynamic name provided by the API
+                        response=function_call.args
+                    )
+                    history.append(response.candidates[0].content)
+                    history.append(types.Content(parts=[types.Part(function_response=function_response)]))
+                    response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
 #fix
                 self.bot.API_CALL_COUNTS["text_generation"] += 1; await self.bot.update_api_count_in_firestore()
                 response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
