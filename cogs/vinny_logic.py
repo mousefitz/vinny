@@ -232,7 +232,9 @@ class VinnyLogic(commands.Cog):
                 
                 tools = []
                 if "?" in message.content.lower() and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                    tools = [types.Tool(google_search=types.GoogleSearch())]; self.bot.API_CALL_COUNTS["search_grounding"] += 1
+                    # --- FIX: Changed to use the correct tool name for the Google AI Studio API ---
+                    from google.generativeai.types import GoogleSearchRetrieval
+                    tools = [types.Tool(google_search_retrieval=GoogleSearchRetrieval())]; self.bot.API_CALL_COUNTS["search_grounding"] += 1
                 if tools: config = types.GenerateContentConfig(tools=tools) if config is None else config.__replace__(tools=tools)
 
                 self.bot.API_CALL_COUNTS["text_generation"] += 1; await self.bot.update_api_count_in_firestore()
