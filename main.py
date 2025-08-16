@@ -9,31 +9,17 @@ import random
 import re
 import json
 from cachetools import TTLCache
-
-# Use python-dotenv for local development to load from a .env file
 from dotenv import load_dotenv
 load_dotenv()
-
-# --- SDK and Auth Imports ---
 from google import genai
 from google.genai import types
-
-# --- Import New Service Modules ---
 from utils.firestore_service import FirestoreService
 from utils import constants
 
 # --- Setup Project-Wide Logging ---
-handler = logging.StreamHandler()
-# You can customize the log format
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger = logging.getLogger()
-logger.addHandler(handler)
-logger.setLevel(logging.INFO) # Use logging.DEBUG for more verbose output
-
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 # --- Standalone Fact Extraction Function ---
-# This remains here as it's a core part of the bot's learning logic.
 async def extract_facts_from_message(bot_instance, user_message: str):
     """
     Analyzes a user message to extract personal facts using the bot's Gemini client.
@@ -97,7 +83,6 @@ class VinnyBot(commands.Bot):
             sys.exit("Error: Essential environment variables are not set.")
 
         # --- Initialize API Clients ---
-        # These will be fully initialized in setup_hook
         self.gemini_client = None
         self.http_session = None
         self.firestore_service = None
