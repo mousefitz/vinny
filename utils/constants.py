@@ -6,7 +6,7 @@ TEXT_GENERATION_LIMIT = 1490
 SEARCH_GROUNDING_LIMIT = 490
 
 # --- Bot Persona ---
-MOODS = ["cranky", "depressed", "artistic", "cheerful", "drunkenly profound", "suspicious", "flirty"]
+MOODS = ["cranky", "depressed", "horny", "belligerent", "artistic", "cheerful", "drunkenly profound", "suspicious", "flirty", "nostalgic", "mischievous"]
 
 # --- Gemini Configuration ---
 GEMINI_SAFETY_SETTINGS_TEXT_ONLY = [
