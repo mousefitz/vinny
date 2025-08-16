@@ -1,4 +1,3 @@
-# utils/firestore_service.py
 import logging
 import base64
 import json

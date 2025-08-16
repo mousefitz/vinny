@@ -1,4 +1,3 @@
-# utils/api_clients.py
 import logging
 import io
 import base64

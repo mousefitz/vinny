@@ -1,4 +1,3 @@
-# utils/constants.py
 from google.genai import types
 
 # --- API Limits ---
