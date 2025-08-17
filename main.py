@@ -100,7 +100,7 @@ class VinnyBot(commands.Bot):
         self.MODEL_NAME = "gemini-2.5-flash"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
-        self.MAX_CHAT_HISTORY_LENGTH = 20
+        self.MAX_CHAT_HISTORY_LENGTH = 10
         
         # --- Persona & Autonomous Mode ---
         self.MOODS = constants.MOODS
