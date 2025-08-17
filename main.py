@@ -5,6 +5,7 @@ from discord.ext import commands
 import aiohttp
 import logging
 import datetime
+from zoneinfo import ZoneInfo
 import random
 import re
 import json
@@ -16,8 +17,41 @@ from google.genai import types
 from utils.firestore_service import FirestoreService
 from utils import constants
 
-# --- Setup Project-Wide Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# 1. Create a custom formatter class
+class ESTFormatter(logging.Formatter):
+    """A custom logging formatter to display timestamps in EST."""
+    def formatTime(self, record, datefmt=None):
+        # Convert the log's timestamp to a timezone-aware datetime object
+        dt = datetime.datetime.fromtimestamp(record.created, tz=ZoneInfo("America/New_York"))
+        
+        # Format the datetime object into a string
+        if datefmt:
+            return dt.strftime(datefmt)
+        else:
+            return dt.isoformat(timespec='milliseconds')
+
+# 2. Configure the root logger to use our new formatter
+def setup_logging():
+    # Get the root logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    
+    # Remove any existing handlers to prevent duplicate logs
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    # Create a new handler to print to the console
+    handler = logging.StreamHandler()
+    
+    # Set the formatter for the handler to our custom ESTFormatter
+    formatter = ESTFormatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S,%f')
+    handler.setFormatter(formatter)
+    
+    # Add the configured handler to the root logger
+    logger.addHandler(handler)
+
+# 3. Run the setup function
+setup_logging()
 
 # --- Standalone Fact Extraction Function ---
 async def extract_facts_from_message(bot_instance, user_message: str):
