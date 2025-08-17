@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING, Coroutine
 
 from google.genai import types
+from google.genai.types import FunctionDeclaration, Tool
 
 # Import from our new utility modules
 from utils import constants, api_clients
@@ -19,6 +20,116 @@ if TYPE_CHECKING:
 # We need to import the function from main
 from main import extract_facts_from_message
 
+# --- NEW ROUTER FUNCTION  ---
+async def route_user_intent(bot_instance, message: discord.Message):
+    """
+    Uses Gemini's function calling ability to classify the user's intent.
+    """
+    # Define the "tools" that Gemini can choose from, based on the bot's features.
+    tools = Tool(
+        function_declarations=[
+            FunctionDeclaration(
+                name="generate_image",
+                description="Generates an image based on a user's description. Triggers on phrases like 'paint me a picture of', 'can you draw', 'I want an image of', etc.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "A detailed description of the image to create. If the user says 'paint me', the prompt is 'me'."
+                        }
+                    },
+                    "required": ["prompt"]
+                }
+            ),
+            FunctionDeclaration(
+                name="get_weather",
+                description="Fetches the current weather for a specific location.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city, state, or ZIP code for the weather forecast, e.g., 'New York' or '90210'."
+                        }
+                    },
+                    "required": ["location"]
+                }
+            ),
+            FunctionDeclaration(
+                name="get_user_knowledge",
+                description="Retrieves and summarizes known facts about a specific person. Triggers on phrases like 'what do you know about...'",
+                 parameters={
+                    "type": "object",
+                    "properties": {
+                        "target_user": {
+                            "type": "string",
+                            "description": "The name of the user to get information about. Can be 'me' to refer to the message author."
+                        }
+                    },
+                    "required": ["target_user"]
+                }
+            ),
+            FunctionDeclaration(
+                name="tag_user",
+                description="Tags or pings a specific user one or more times.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "user_to_tag": {
+                            "type": "string",
+                            "description": "The name of the user to tag."
+                        },
+                        "times_to_tag": {
+                            "type": "integer",
+                            "description": "The number of times to tag the user. Defaults to 1."
+                        }
+                    },
+                    "required": ["user_to_tag"]
+                }
+            ),
+            FunctionDeclaration(
+                name="get_my_name",
+                description="Retrieves and states the user's nickname as the bot knows it. Triggers on 'what's my name'.",
+                parameters={} # No parameters needed
+            ),
+            FunctionDeclaration(
+                name="general_conversation",
+                description="Use this for any general chat, questions, or comments that don't fit other functions.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "comment": {
+                            "type": "string",
+                            "description": "A placeholder for the conversational text."
+                        }
+                    }
+                }
+            )
+        ]
+    )
+
+    try:
+        # Ask Gemini to choose a function based on the user's message
+        response = await bot_instance.gemini_client.aio.models.generate_content(
+            model=bot_instance.MODEL_NAME,
+            contents=[types.Content(parts=[types.Part(text=message.content)])],
+            tools=[tools]
+        )
+        
+        # Extract the function call Gemini chose
+        function_call = response.candidates[0].content.parts[0].function_call
+        
+        if function_call:
+            intent_name = function_call.name
+            intent_args = {key: value for key, value in function_call.args.items()}
+            return intent_name, intent_args
+
+    except Exception as e:
+        logging.error("Failed to route user intent.", exc_info=True)
+
+    # Default to general conversation if anything fails
+    return "general_conversation", {"comment": message.content}
 
 class VinnyLogic(commands.Cog):
     def __init__(self, bot: 'VinnyBot'):
@@ -61,21 +172,23 @@ class VinnyLogic(commands.Cog):
         self.bot.processed_message_ids[message.id] = True
         
         try:
-            # --- Correction Handling ---
+            # --- PRE-ROUTER CHECKS for special cases ---
+            
+            # 1. Check for user corrections
             correction_keywords = ["i'm not", "i am not", "i don't", "i do not", "that's not true", "that isn't true"]
             is_mention = self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in ["vinny", "vincenzo"])
             if is_mention and any(keyword in message.content.lower() for keyword in correction_keywords):
-                return await self._handle_correction(message)
+                return await self._handle_correction(message) # Handle and exit
 
-            # --- Image Reply Handling ---
+            # 2. Check for replies to images
             if message.reference and self.bot.user.mentioned_in(message):
                 original_message = await message.channel.fetch_message(message.reference.message_id)
                 if original_message.attachments and "image" in original_message.attachments[0].content_type:
-                    return await self._handle_image_reply(message, original_message)
-            
-            # --- Determine if Bot Should Respond ---
-            should_respond, is_direct_reply, is_autonomous = False, False, False
-            if message.reference:
+                    return await self._handle_image_reply(message, original_message) # Handle and exit
+
+            # --- Determine if Bot Should Respond (Main Logic) ---
+            should_respond, is_direct_reply = False, False
+            if message.reference and not self.bot.user.mentioned_in(message):
                 ref_msg = await message.channel.fetch_message(message.reference.message_id)
                 if ref_msg.author == self.bot.user:
                     should_respond, is_direct_reply = True, True
@@ -85,12 +198,63 @@ class VinnyLogic(commands.Cog):
                 if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
                     should_respond = True
                 elif self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance:
-                    should_respond, is_autonomous = True, True
-                elif message.guild is None: # DM Channel
+                    should_respond = True
+                elif message.guild is None:
                     should_respond = True
             
-            if not should_respond:
-                # --- Passive Reactions ---
+            # --- Main Logic Branch ---
+            if should_respond:
+                await self.update_vinny_mood()
+
+                # Call the router function to determine general intent
+                intent, args = await route_user_intent(self.bot, message)
+
+                # Execute logic based on the identified intent
+                if intent == "generate_image":
+                    prompt = args.get("prompt", "something vague")
+                    if prompt.lower() == "me":
+                        await self._handle_paint_me_request(message)
+                    else:
+                        await self._handle_image_request(message, prompt)
+                
+                elif intent == "get_weather":
+                    ctx = await self.bot.get_context(message)
+                    await self.weather_command.callback(self, ctx, location=args.get("location", ""))
+
+                elif intent == "get_user_knowledge":
+                    target_name = args.get("target_user", "me")
+                    target_user = None
+                    if target_name.lower() == 'me':
+                        target_user = message.author
+                    elif message.mentions:
+                        target_user = message.mentions[0]
+                    elif message.guild:
+                        target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
+                        if not target_user:
+                            target_user = await self._find_user_by_vinny_name(message.guild, target_name)
+                    
+                    if target_user:
+                        await self._handle_knowledge_request(message, target_user)
+                    else:
+                        await message.channel.send(f"who? couldn't find anyone named '{target_name}'.")
+
+                # --- vvv THIS IS THE MISSING PIECE vvv ---
+                elif intent == "tag_user":
+                    user_to_tag = args.get("user_to_tag", "")
+                    times = args.get("times_to_tag", 1)
+                    await self.find_and_tag_member(message, user_to_tag, times)
+
+                elif intent == "get_my_name":
+                    name = await self.bot.firestore_service.get_user_nickname(str(message.author.id))
+                    await message.channel.send(f"they call ya {name}, right?" if name else "i got nothin'.")
+                # --- ^^^ END OF THE MISSING PIECE ^^^ ---
+
+                elif intent == "general_conversation":
+                    is_autonomous = not (is_direct_reply or self.bot.user.mentioned_in(message))
+                    await self._handle_text_or_image_response(message, is_autonomous=is_autonomous)
+
+            # --- Passive Reaction Logic ---
+            else:
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
                 if "pie" in message.content.lower() and random.random() < 0.75:
                     await message.add_reaction('🥧')
@@ -104,73 +268,9 @@ class VinnyLogic(commands.Cog):
                         logging.warning(f"Failed to add reaction: {e}")
                 return
 
-            # --- Active Response Logic ---
-            await self.update_vinny_mood()
-            if is_direct_reply:
-                return await self._handle_reply(message)
-
-            # --- Natural Language Command Parsing ---
-            knowledge_pattern = re.compile(r"what do you know about\s(.+)", re.IGNORECASE)
-            if match := knowledge_pattern.search(message.content):
-                target_name = match.group(1).strip().rstrip('?')
-                if target_name.lower() in ["this server", "the server", "this place", "here"]:
-                    return await self._handle_server_knowledge_request(message)
-                
-                target_user = None
-                if target_name.lower() == 'me':
-                    target_user = message.author
-                elif message.mentions:
-                    target_user = message.mentions[0]
-                elif message.guild:
-                    target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
-                    if not target_user:
-                        target_user = await self._find_user_by_vinny_name(message.guild, target_name)
-                
-                if target_user:
-                    return await self._handle_knowledge_request(message, target_user)
-
-            cleaned_actions = re.sub(f'<@!?{self.bot.user.id}>', '', message.content, flags=re.IGNORECASE).strip()
-            bot_names = ["vinny", "vincenzo", "vin vin"]
-            for name in bot_names:
-                if cleaned_actions.lower().startswith(f"{name} "):
-                    cleaned_actions = cleaned_actions[len(name)+1:]
-                    break
-            
-            image_trigger_keywords = ["paint", "draw", "make a picture of", "create an image of", "generate an image of"]
-            if any(cleaned_actions.lower().startswith(kw) for kw in image_trigger_keywords):
-                prompt_text = cleaned_actions
-                for kw in image_trigger_keywords:
-                    if cleaned_actions.lower().startswith(kw):
-                        prompt_text = cleaned_actions[len(kw):].strip()
-                        break
-                return await self._handle_image_request(message, prompt_text)
-            
-            tag_keywords = ["tag", "ping"]
-            for keyword in tag_keywords:
-                if cleaned_actions.lower().startswith(keyword + " "):
-                    times_to_tag = 1
-                    if match := re.search(r'(\d+)\s+times', cleaned_actions, re.IGNORECASE):
-                        try:
-                            times_to_tag = int(match.group(1))
-                        except ValueError:
-                            times_to_tag = 1
-                    
-                    name_to_find = message.mentions[0].display_name if message.mentions else cleaned_actions[len(keyword)+1:].strip().split(' ')[0]
-                    return await self.find_and_tag_member(message, name_to_find, times_to_tag)
-
-            if "what's my name" in message.content.lower():
-                name = await self.bot.firestore_service.get_user_nickname(str(message.author.id))
-                return await message.channel.send(f"they call ya {name}, right?" if name else "i got nothin'.")
-            
-            if match := re.search(r"my name is\s+([A-Z][a-z]{2,})", message.content, re.IGNORECASE):
-                if await self.bot.firestore_service.save_user_nickname(str(message.author.id), match.group(1)):
-                    return await message.channel.send(f"aight, {match.group(1)}, got it.")
-            
-            await self._handle_text_or_image_response(message, is_autonomous=is_autonomous)
-
         except Exception:
             logging.critical("CRITICAL ERROR in on_message", exc_info=True)
-
+            
     # --- Internal Helper for Finding Users by Nickname ---
     async def _find_user_by_vinny_name(self, guild: discord.Guild, target_name: str):
         if not self.bot.firestore_service or not guild:
