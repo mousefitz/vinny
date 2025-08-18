@@ -100,6 +100,7 @@ async def extract_facts_from_message(bot_instance, user_message: str):
 
 
 class VinnyBot(commands.Bot):
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -113,10 +114,10 @@ class VinnyBot(commands.Bot):
 
         # --- Validate Configuration ---
         if not self.DISCORD_BOT_TOKEN or not self.GEMINI_API_KEY:
-            logging.critical("Essential environment variables (DISCORD_BOT_TOKEN, GEMINI_API_KEY) are not set.")
+            logging.critical("Essential environment variables are not set.")
             sys.exit("Error: Essential environment variables are not set.")
 
-        # --- Initialize API Clients ---
+        # --- API Clients (will be initialized in setup_hook) ---
         self.gemini_client = None
         self.http_session = None
         self.firestore_service = None
@@ -127,15 +128,32 @@ class VinnyBot(commands.Bot):
                 self.personality_instruction = f.read()
             logging.info("Personality prompt loaded.")
         except FileNotFoundError:
-            logging.critical("personality.txt not found. Please create it.")
+            logging.critical("personality.txt not found.")
             sys.exit("Error: personality.txt not found.")
 
         # --- Bot State & Globals ---
         self.MODEL_NAME = "gemini-2.5-flash"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
-        self.MAX_CHAT_HISTORY_LENGTH = 20
+        self.MAX_CHAT_HISTORY_LENGTH = 15
         
+        # --- Harm Categories ---
+        safety_settings_list = [
+            types.SafetySetting(
+                category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE
+            )
+            for cat in [
+                types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            ]
+        ]
+        
+        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(
+            safety_settings=safety_settings_list
+        )
+    
         # --- Persona & Autonomous Mode ---
         self.MOODS = constants.MOODS
         self.current_mood = random.choice(self.MOODS)
@@ -146,10 +164,6 @@ class VinnyBot(commands.Bot):
         self.autonomous_reply_chance = 0.05
         self.reaction_chance = 0.15
         
-        # --- Centralized Gemini Configuration ---
-        self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY = constants.GEMINI_SAFETY_SETTINGS_TEXT_ONLY
-        self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(safety_settings=self.GEMINI_SAFETY_SETTINGS_TEXT_ONLY)
-        
         # --- Rate Limiting ---
         self.TEXT_GENERATION_LIMIT = constants.TEXT_GENERATION_LIMIT
         self.SEARCH_GROUNDING_LIMIT = constants.SEARCH_GROUNDING_LIMIT
@@ -159,20 +173,19 @@ class VinnyBot(commands.Bot):
             "search_grounding": 0,
         }
 
-    # --- Core Bot Setup ---
     async def setup_hook(self):
         """This is called once when the bot logs in."""
         logging.info("Running setup_hook...")
         self.http_session = aiohttp.ClientSession()
+        
+        # Correctly initialize the genai.Client
         self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
         
-        # Initialize our new service
         self.firestore_service = FirestoreService(
             loop=self.loop,
             firebase_b64_creds=self.FIREBASE_B64,
             app_id=self.APP_ID
         )
-        
         if self.firestore_service.db:
             await self.initialize_rate_limiter()
 
