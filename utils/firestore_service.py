@@ -164,6 +164,40 @@ class FirestoreService:
         path = constants.get_summaries_collection_path(self.APP_ID, guild_id)
         return await self.get_docs(path)
     
+    async def retrieve_relevant_memories(self, guild_id: str, query_keywords: list, limit: int = 2):
+        """
+        Retrieves the most relevant memory summaries based on keywords.
+        """
+        if not self.db or not query_keywords:
+            return []
+
+        path = constants.get_summaries_collection_path(self.APP_ID, guild_id)
+        
+        try:
+            collection_ref = self.db.collection(path)
+            
+            docs_query = collection_ref.order_by(
+                "timestamp", direction=firestore.Query.DESCENDING
+            ).limit(48)
+            
+            docs_snapshot = await self.loop.run_in_executor(None, docs_query.stream)
+            
+            all_docs = [doc.to_dict() for doc in docs_snapshot]
+            
+            relevant_docs = []
+            for doc in all_docs:
+                searchable_text = doc.get("summary", "").lower()
+                searchable_keywords = [k.lower() for k in doc.get("keywords", [])]
+                
+                if any(qk.lower() in searchable_text or qk.lower() in searchable_keywords for qk in query_keywords):
+                    relevant_docs.append(doc)
+
+            return relevant_docs[:limit]
+
+        except Exception:
+            logging.error(f"Failed to retrieve relevant memories for guild '{guild_id}'", exc_info=True)
+            return []
+        
     async def retrieve_general_memories(self, guild_id: str, query_keywords: list, limit: int = 2):
         if not self.db: return []
         path = constants.get_summaries_collection_path(self.APP_ID, guild_id)

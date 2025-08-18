@@ -117,7 +117,19 @@ class VinnyLogic(commands.Cog):
                     if is_direct_reply:
                         await self._handle_text_or_image_response(message, is_autonomous=False)
                     else:
-                        intent, args = await get_intent_from_prompt(self.bot, message)
+                        # --- FIX PART 1: Check for simple "ping" mentions ---
+                        # We clean the message of any bot mentions. If nothing is left, it's just a ping.
+                        cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+
+                        if not cleaned_content:
+                            # If the message was just a ping, force it to be a general conversation.
+                            intent, args = "general_conversation", {}
+                        else:
+                            # Otherwise, let the intent router do its job.
+                            intent, args = await get_intent_from_prompt(self.bot, message)
+
+                        # --- END FIX PART 1 ---
+
                         if intent == "generate_image":
                             prompt = args.get("prompt", "something vague")
                             if prompt.lower() == "me": await self._handle_paint_me_request(message)
@@ -136,9 +148,15 @@ class VinnyLogic(commands.Cog):
                             if target_user: await self._handle_knowledge_request(message, target_user)
                             else: await message.channel.send(f"who? couldn't find anyone named '{target_name}'.")
                         elif intent == "tag_user":
+                            # --- FIX PART 2: Add a safeguard ---
                             user_to_tag = args.get("user_to_tag", "")
-                            times = args.get("times_to_tag", 1)
-                            await self.find_and_tag_member(message, user_to_tag, times)
+                            # If the AI mistakenly thinks it should tag itself, override and treat as conversation.
+                            if user_to_tag.lower() in ["vinny", self.bot.user.name.lower(), self.bot.user.display_name.lower()]:
+                                await self._handle_text_or_image_response(message, is_autonomous=False)
+                            else:
+                                times = args.get("times_to_tag", 1)
+                                await self.find_and_tag_member(message, user_to_tag, times)
+                            # --- END FIX PART 2 ---
                         elif intent == "get_my_name":
                             name = await self.bot.firestore_service.get_user_nickname(str(message.author.id))
                             await message.channel.send(f"they call ya {name}, right?" if name else "i got nothin'.")
@@ -283,36 +301,113 @@ class VinnyLogic(commands.Cog):
             await reply_message.channel.send("my eyes are all blurry, couldn't make out the picture, pal.")
 
     async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False):
-        if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
+        if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT:
+            return
+
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
             user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
+            
+            # --- 1. Get User Profile ---
             user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id) or {}
             profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
             user_name_to_use = await self.bot.firestore_service.get_user_nickname(user_id) or message.author.display_name
-            history = [types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]), types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])]
+
+            # --- 2. Get Short-Term Chat History ---
+            history = [
+                types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
+                types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
+            ]
+            raw_history_text_for_summary = []
             async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH):
-                if msg.id == message.id: continue
-                history.append(types.Content(role="model" if msg.author == self.bot.user else "user", parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]))
+                if msg.id == message.id:
+                    continue
+                
+                history.append(types.Content(
+                    role="model" if msg.author == self.bot.user else "user",
+                    parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]
+                ))
+                raw_history_text_for_summary.append(f"{msg.author.display_name}: {msg.content}")
+
             history.reverse()
+            raw_history_text_for_summary.reverse()
+
+            # --- 3. NEW: Get a summary of the immediate conversation ---
+            immediate_context_summary = ""
+            if raw_history_text_for_summary:
+                try:
+                    summary_prompt_text = (
+                        "You are a conversation analysis tool. Read the following chat log and provide a one-sentence summary of the current topic or situation.\n\n"
+                        "## CHAT LOG:\n"
+                        f"{' \n'.join(raw_history_text_for_summary)}\n\n"
+                        "## SUMMARY:"
+                    )
+                    response = await self.bot.gemini_client.aio.models.generate_content(
+                        model=self.bot.MODEL_NAME,
+                        contents=[summary_prompt_text]
+                    )
+                    immediate_context_summary = f"\n# --- CURRENT CONVERSATION SUMMARY ---\nThe current topic is: {response.text.strip()}\n"
+                except Exception:
+                    logging.warning("Failed to generate immediate conversation summary.", exc_info=True)
+
+            # --- 4. Get Long-Term Memories ---
+            relevant_memories_string = ""
+            if guild_id:
+                try:
+                    keyword_prompt = f"Extract 3-5 key nouns or topics from the following message. Return them as a comma-separated list. Message: \"{message.content}\""
+                    response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[keyword_prompt])
+                    keywords = [k.strip() for k in response.text.split(',')]
+                    
+                    if keywords:
+                        memories = await self.bot.firestore_service.retrieve_relevant_memories(guild_id, keywords, limit=2)
+                        if memories:
+                            formatted_memories = "\n".join([f"- {m.get('summary', 'something i forgot')}" for m in memories])
+                            relevant_memies_string = f"\n# --- RELEVANT LONG-TERM MEMORIES ---\nHere are summaries of past conversations that might be relevant:\n{formatted_memories}\n"
+                except Exception:
+                    logging.error("Failed to retrieve or process long-term memories.", exc_info=True)
+
+            # --- 5. Construct the Final Prompt ---
             prompt_parts = [types.Part(text=message.content)]
             if message.attachments:
                 for attachment in message.attachments:
                     if "image" in attachment.content_type:
-                        prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read()))); break
-            final_instruction_text = (f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}. Facts: {profile_facts_string}. Respond to the message.")
-            if is_autonomous: final_instruction_text = (f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation. Comment on the last message, which was from '{user_name_to_use}'. Your known facts about them are: {profile_facts_string}.")
+                        prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read())))
+                        break
+            
+            final_instruction_text = (
+                f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}.\n"
+                f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
+                f"{immediate_context_summary}"
+                f"{relevant_memories_string}"
+                f"Based on all this context (facts, current topic, and long-term memories), respond to the last message."
+            )
+
+            if is_autonomous:
+                final_instruction_text = (
+                    f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation. "
+                    f"Comment on the last message, which was from '{user_name_to_use}'.\n"
+                    f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
+                    f"{immediate_context_summary}"
+                    f"{relevant_memories_string}"
+                )
+
             history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text), *prompt_parts]))
+
+            # --- 6. Generate and Send Response ---
             config = self.text_gen_config
             if "?" in message.content and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                 config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
                 self.bot.API_CALL_COUNTS["search_grounding"] += 1
+            
             self.bot.API_CALL_COUNTS["text_generation"] += 1
             await self.bot.update_api_count_in_firestore()
+
             response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
+
             if response.text:
                 cleaned_response = response.text.strip()
                 if cleaned_response and cleaned_response.lower() != '[silence]':
-                    for chunk in self.bot.split_message(cleaned_response): await message.channel.send(chunk.lower())
+                    for chunk in self.bot.split_message(cleaned_response):
+                        await message.channel.send(chunk.lower())
     
     async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
         user_id = str(target_user.id)
@@ -522,8 +617,15 @@ class VinnyLogic(commands.Cog):
 
     @commands.command(name='propose')
     async def propose_command(self, ctx, member: discord.Member):
-        if ctx.author == member: return await ctx.send("proposin' to yourself? i get it.")
-        if member.bot: return await ctx.send("proposin' to a robot? find a real pulse.")
+        if ctx.author == member: 
+            return await ctx.send("heh, cute. but you can't propose to yourself, pal. pick someone else.")
+        
+        elif member == self.bot.user:
+            return await ctx.send("whoa there, i'm flattered, really. but my heart belongs to the sea... and maybe rum. i'm off the market, sweetie.")
+        
+        elif member.bot: 
+            return await ctx.send("proposin' to a robot? find a real pulse.")
+            
         if await self.bot.firestore_service.save_proposal(str(ctx.author.id), str(member.id)):
             await ctx.send(f"whoa! {ctx.author.mention} is on one knee for {member.mention}. you got 5 mins to say yes with `!marry @{ctx.author.display_name}`.")
 
@@ -545,11 +647,16 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='ballandchain')
     async def ballandchain_command(self, ctx):
         profile = await self.bot.firestore_service.get_user_profile(str(ctx.author.id), None)
+        
         if profile and profile.get("married_to"):
             partner_id = profile.get("married_to")
-            partner = self.bot.get_user(int(partner_id)) or await self.bot.fetch_user(int(partner_id))
-            partner_name = partner.display_name if partner else "a ghost"
-            await ctx.send(f"you're shackled to **{partner_name}**. happened on **{profile.get('marriage_date')}**.")
+            try:
+                partner = await self.bot.fetch_user(int(partner_id))
+                partner_name = partner.display_name if partner else "a ghost"
+            except (discord.NotFound, ValueError):
+                partner_name = "a ghost I can't find anymore"
+                
+            await ctx.send(f"you're shackled to **{partner_name}**. happened on **{profile.get('marriage_date', 'some forgotten day')}**.")
         else:
             await ctx.send("you ain't married to nobody.")
 
