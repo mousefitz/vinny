@@ -126,6 +126,32 @@ class FirestoreService:
             logging.error(f"Failed to delete fact '{fact_key}' for user '{user_id}'", exc_info=True)
             return False
 
+    # --- Relationship Score Management ---
+    async def update_relationship_score(self, user_id: str, guild_id: str, sentiment_score: int):
+        """Updates a user's relationship score and returns the new total."""
+        if not self.db: return 0
+        
+        path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
+        doc_ref = self.db.collection(path).document(user_id)
+
+        try:
+            @firestore.transactional
+            def update_in_transaction(transaction, doc_ref_to_update):
+                snapshot = doc_ref_to_update.get(transaction=transaction)
+                current_score = snapshot.to_dict().get("relationship_score", 0) if snapshot.exists else 0
+                
+                new_score = current_score + sentiment_score
+                new_score *= 0.995 
+                
+                transaction.set(doc_ref_to_update, {"relationship_score": new_score}, merge=True)
+                return new_score
+
+            new_score = await self.loop.run_in_executor(None, update_in_transaction, self.db.transaction(), doc_ref)
+            return new_score
+        except Exception:
+            logging.error(f"Failed to update relationship score for user '{user_id}'", exc_info=True)
+            return 0
+        
     # --- Nickname Management ---
     async def save_user_nickname(self, user_id: str, nickname: str):
         if not self.db: return False

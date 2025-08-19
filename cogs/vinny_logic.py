@@ -20,6 +20,37 @@ if TYPE_CHECKING:
     from main import VinnyBot, extract_facts_from_message
 from main import extract_facts_from_message
 
+# New message sentiment function
+async def get_message_sentiment(bot_instance, message_content: str):
+    """
+    Analyzes the sentiment of a user's message.
+    """
+    sentiment_prompt = (
+        "You are a sentiment analysis expert. Analyze the following user message and classify its primary sentiment. "
+        "Your output MUST be a single, valid JSON object with one key, 'sentiment', and one of the following values: "
+        "'positive', 'negative', 'neutral', 'sarcastic', 'flirty', 'angry'.\n\n"
+        "## Examples:\n"
+        "- User Message: 'I love this new feature, you're the best!' -> {\"sentiment\": \"positive\"}\n"
+        "- User Message: 'Ugh, I had such a bad day.' -> {\"sentiment\": \"negative\"}\n"
+        "- User Message: 'wow, great job. really impressive.' -> {\"sentiment\": \"sarcastic\"}\n"
+        "- User Message: 'hey there ;) what are you up to?' -> {\"sentiment\": \"flirty\"}\n\n"
+        f"## User Message to Analyze:\n"
+        f"\"{message_content}\""
+    )
+    try:
+        response = await bot_instance.gemini_client.aio.models.generate_content(
+            model=bot_instance.MODEL_NAME,
+            contents=[sentiment_prompt]
+        )
+        json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
+        if json_match:
+            json_string = json_match.group(1) or json_match.group(2)
+            sentiment_data = json.loads(json_string)
+            return sentiment_data.get("sentiment")
+    except Exception:
+        logging.error("Failed to get message sentiment.", exc_info=True)
+    return "neutral"
+
 # --- NEW PROMPT-BASED INTENT ROUTER (Compatible with all models) ---
 async def get_intent_from_prompt(bot_instance, message: discord.Message):
     """
@@ -112,7 +143,31 @@ class VinnyLogic(commands.Cog):
                 elif message.guild is None: should_respond = True
             
             if should_respond:
+                # 1. Analyze user sentiment to influence mood and relationships
+                user_sentiment = await get_message_sentiment(self.bot, message.content)
+                
+                # 2. Convert sentiment to a numerical score for relationship tracking
+                sentiment_score_map = {
+                    "positive": 2, "flirty": 3, "negative": -2,
+                    "angry": -5, "sarcastic": -1, "neutral": 0.5
+                }
+                score_change = sentiment_score_map.get(user_sentiment, 0)
+                
+                # 3. Update the user's relationship score and status in the database
+                if message.guild:
+                    new_total_score = await self.bot.firestore_service.update_relationship_score(
+                        str(message.author.id), str(message.guild.id), score_change
+                    )
+                    await self._update_relationship_status(
+                        str(message.author.id), str(message.guild.id), new_total_score
+                    )
+                
+                # 4. Update Vinny's immediate mood based on the sentiment
+                await self.update_mood_based_on_sentiment(user_sentiment)
+
+                # The old timer-based mood update still runs as a fallback
                 await self.update_vinny_mood()
+                
                 async with message.channel.typing():
                     if is_direct_reply:
                         await self._handle_text_or_image_response(message, is_autonomous=False)
@@ -200,6 +255,44 @@ class VinnyLogic(commands.Cog):
         except Exception:
             logging.error("Failed to perform contradiction check.", exc_info=True)
         return False
+
+    async def update_mood_based_on_sentiment(self, sentiment: str):
+        """
+        Influences Vinny's mood based on conversational sentiment.
+        """
+        # Define how sentiments map to moods.
+        mood_map = {
+            "positive": ["cheerful", "flirty"],
+            "negative": ["cranky", "depressed", "belligerent"],
+            "sarcastic": ["suspicious", "cranky"],
+            "flirty": ["flirty", "horny"],
+            "angry": ["belligerent", "cranky"],
+        }
+
+        # If the sentiment has a corresponding mood, there's a chance it will influence him.
+        if sentiment in mood_map and random.random() < 0.25: # 25% chance to be influenced
+            new_mood = random.choice(mood_map[sentiment])
+            if self.bot.current_mood != new_mood:
+                self.bot.current_mood = new_mood
+                self.bot.last_mood_change_time = datetime.datetime.now()
+                logging.info(f"Vinny's mood was influenced by conversation. New mood: {self.bot.current_mood}")
+    
+    async def _update_relationship_status(self, user_id: str, guild_id: str | None, new_score: float):
+        """Determines a user's relationship status based on their score."""
+        thresholds = {
+            "admired": 100, "friends": 50, "distrusted": -50, "annoyance": -100,
+        }
+        new_status = "neutral"
+        if new_score >= thresholds["admired"]: new_status = "admired"
+        elif new_score >= thresholds["friends"]: new_status = "friends"
+        elif new_score <= thresholds["annoyance"]: new_status = "annoyance"
+        elif new_score <= thresholds["distrusted"]: new_status = "distrusted"
+            
+        current_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+        current_status = current_profile.get("relationship_status", "neutral")
+        if current_status != new_status:
+            await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "relationship_status", new_status)
+            logging.info(f"Relationship status for user {user_id} changed from '{current_status}' to '{new_status}' (Score: {new_score:.2f})")
 
     async def _find_user_by_vinny_name(self, guild: discord.Guild, target_name: str):
         if not self.bot.firestore_service or not guild: return None
