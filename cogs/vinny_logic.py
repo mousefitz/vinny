@@ -20,7 +20,29 @@ if TYPE_CHECKING:
     from main import VinnyBot, extract_facts_from_message
 from main import extract_facts_from_message
 
+#short term summary
+async def get_short_term_summary(bot_instance, message_history: list):
+    """Summarizes the last few messages to find the current topic."""
+    conversation_text = "\n".join(message_history)
+    summary_prompt = (
+        "You are a conversation analysis tool. Read the following chat log and provide a concise, "
+        "one-sentence summary of the current topic or situation.\n\n"
+        "## CHAT LOG:\n"
+        f"{conversation_text}\n\n"
+        "## ONE-SENTENCE SUMMARY:"
+    )
+    try:
+        response = await bot_instance.gemini_client.aio.models.generate_content(
+            model=bot_instance.MODEL_NAME,
+            contents=[summary_prompt]
+        )
+        return response.text.strip()
+    except Exception:
+        logging.error("Failed to generate short-term summary.", exc_info=True)
+    return ""
+
 # New message sentiment function
+
 async def get_message_sentiment(bot_instance, message_content: str):
     """
     Analyzes the sentiment of a user's message.
@@ -132,98 +154,60 @@ class VinnyLogic(commands.Cog):
                 original_message = await message.channel.fetch_message(message.reference.message_id)
                 if original_message.attachments and "image" in original_message.attachments[0].content_type: return await self._handle_image_reply(message, original_message)
             
-            should_respond, is_direct_reply = False, False
-            if message.reference:
-                ref_msg = await message.channel.fetch_message(message.reference.message_id)
-                if ref_msg.author == self.bot.user: should_respond, is_direct_reply = True, True
-            if not should_respond:
-                bot_names = ["vinny", "vincenzo", "vin vin"]
-                if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names): should_respond = True
-                elif self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance: should_respond = True
-                elif message.guild is None: should_respond = True
-            
-            if should_respond:
-                # 1. Analyze user sentiment to influence mood and relationships
-                user_sentiment = await get_message_sentiment(self.bot, message.content)
-                
-                # 2. Convert sentiment to a numerical score for relationship tracking
-                sentiment_score_map = {
-                    "positive": 2, "flirty": 3, "negative": -2,
-                    "angry": -5, "sarcastic": -1, "neutral": 0.5
-                }
-                score_change = sentiment_score_map.get(user_sentiment, 0)
-                
-                # 3. Update the user's relationship score and status in the database
-                if message.guild:
-                    new_total_score = await self.bot.firestore_service.update_relationship_score(
-                        str(message.author.id), str(message.guild.id), score_change
-                    )
-                    await self._update_relationship_status(
-                        str(message.author.id), str(message.guild.id), new_total_score
-                    )
-                
-                # 4. Update Vinny's immediate mood based on the sentiment
-                await self.update_mood_based_on_sentiment(user_sentiment)
+            # --- Logic to specifically handle direct replies and mention-replies ---
+            bot_names = ["vinny", "vincenzo", "vin vin"]
+            is_native_reply = message.reference and (await message.channel.fetch_message(message.reference.message_id)).author == self.bot.user
+            is_mention_reply = message.content.lower().startswith(tuple(f"{name} " for name in bot_names)) or message.content.startswith(f'<@{self.bot.user.id}>')
 
-                # The old timer-based mood update still runs as a fallback
-                await self.update_vinny_mood()
+            # If it's either type of reply, use the focused reply handler
+            if is_native_reply or is_mention_reply:
+                await self.update_vinny_mood() # Mood can still be influenced by replies
+                async with message.channel.typing():
+                    await self._handle_direct_reply(message)
+                return # Stop processing after handling the reply
+
+            # --- Autonomous and General Chat Logic ---
+            should_respond, is_autonomous = False, False
+            if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
+                should_respond = True
+            elif self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance:
+                should_respond, is_autonomous = True, True
+            elif message.guild is None: # Always respond in DMs
+                should_respond = True
+
+            if should_respond:
+                # --- Dynamic Mood & Relationship Logic ---
+                user_sentiment = await get_message_sentiment(self.bot, message.content)
+                sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
+                score_change = sentiment_score_map.get(user_sentiment, 0)
+                if message.guild:
+                    new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
+                    await self._update_relationship_status(str(message.author.id), str(message.guild.id), new_total_score)
+                await self.update_mood_based_on_sentiment(user_sentiment)
+                await self.update_vinny_mood() # Timer-based mood update
+                
+                # --- Short-Term Summary for Autonomous Replies ---
+                summary = ""
+                if is_autonomous and message.guild:
+                    message_history = []
+                    async for msg in message.channel.history(limit=5):
+                        message_history.append(f"{msg.author.display_name}: {msg.content}")
+                    message_history.reverse()
+                    summary = await get_short_term_summary(self.bot, message_history)
                 
                 async with message.channel.typing():
-                    if is_direct_reply:
-                        await self._handle_text_or_image_response(message, is_autonomous=False)
-                    else:
-                        # --- FIX PART 1: Check for simple "ping" mentions ---
-                        # We clean the message of any bot mentions. If nothing is left, it's just a ping.
-                        cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+                    # Call the appropriate handler based on whether it's a general mention or an autonomous interjection
+                    if is_autonomous:
+                        await self._handle_text_or_image_response(message, is_autonomous=True, summary=summary)
+                    else: # It's a general mention that isn't a direct reply
+                        await self._handle_text_or_image_response(message, is_autonomous=False, summary="")
 
-                        if not cleaned_content:
-                            # If the message was just a ping, force it to be a general conversation.
-                            intent, args = "general_conversation", {}
-                        else:
-                            # Otherwise, let the intent router do its job.
-                            intent, args = await get_intent_from_prompt(self.bot, message)
-
-                        # --- END FIX PART 1 ---
-
-                        if intent == "generate_image":
-                            prompt = args.get("prompt", "something vague")
-                            if prompt.lower() == "me": await self._handle_paint_me_request(message)
-                            else: await self._handle_image_request(message, prompt)
-                        elif intent == "get_weather":
-                            ctx = await self.bot.get_context(message)
-                            await self.weather_command.callback(self, ctx, location=args.get("location", ""))
-                        elif intent == "get_user_knowledge":
-                            target_name = args.get("target_user", "me")
-                            target_user = None
-                            if target_name.lower() == 'me': target_user = message.author
-                            elif message.mentions: target_user = message.mentions[0]
-                            elif message.guild:
-                                target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
-                                if not target_user: target_user = await self._find_user_by_vinny_name(message.guild, target_name)
-                            if target_user: await self._handle_knowledge_request(message, target_user)
-                            else: await message.channel.send(f"who? couldn't find anyone named '{target_name}'.")
-                        elif intent == "tag_user":
-                            # --- FIX PART 2: Add a safeguard ---
-                            user_to_tag = args.get("user_to_tag", "")
-                            # If the AI mistakenly thinks it should tag itself, override and treat as conversation.
-                            if user_to_tag.lower() in ["vinny", self.bot.user.name.lower(), self.bot.user.display_name.lower()]:
-                                await self._handle_text_or_image_response(message, is_autonomous=False)
-                            else:
-                                times = args.get("times_to_tag", 1)
-                                await self.find_and_tag_member(message, user_to_tag, times)
-                            # --- END FIX PART 2 ---
-                        elif intent == "get_my_name":
-                            name = await self.bot.firestore_service.get_user_nickname(str(message.author.id))
-                            await message.channel.send(f"they call ya {name}, right?" if name else "i got nothin'.")
-                        elif intent == "general_conversation":
-                            is_autonomous = not (is_direct_reply or self.bot.user.mentioned_in(message))
-                            await self._handle_text_or_image_response(message, is_autonomous=is_autonomous)
-                
                 if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
                     if extracted_facts := await extract_facts_from_message(self.bot, message.content):
                         for key, value in extracted_facts.items():
                             await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
             else:
+                # --- Passive Reaction Logic ---
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
                 if "pie" in message.content.lower() and random.random() < 0.75: await message.add_reaction('🥧')
                 elif any(keyword in message.content.lower() for keyword in explicit_reaction_keywords) or (random.random() < self.bot.reaction_chance):
@@ -233,6 +217,7 @@ class VinnyLogic(commands.Cog):
                     except discord.Forbidden: logging.warning(f"Missing permissions to add reactions in {message.channel.id}")
                     except Exception as e: logging.warning(f"Failed to add reaction: {e}")
                 return
+
         except Exception:
             logging.critical("CRITICAL ERROR in on_message", exc_info=True)
 
@@ -393,10 +378,54 @@ class VinnyLogic(commands.Cog):
             logging.error("Failed to handle an image reply.", exc_info=True)
             await reply_message.channel.send("my eyes are all blurry, couldn't make out the picture, pal.")
 
-    async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False):
-        if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT:
+    async def _handle_direct_reply(self, message: discord.Message):
+        """Handles a direct reply (via reply or mention) to one of the bot's messages with a focused context."""
+        
+        # Find the message that the user is likely replying to.
+        replied_to_message = None
+        if message.reference and message.reference.message_id:
+            # Case 1: It's a native Discord reply.
+            replied_to_message = await message.channel.fetch_message(message.reference.message_id)
+        else:
+            # Case 2: It's a mention reply. Find the last message Vinny sent.
+            async for prior_message in message.channel.history(limit=10):
+                if prior_message.author == self.bot.user:
+                    replied_to_message = prior_message
+                    break
+        
+        # If we couldn't find a message to reply to, fall back to the general handler.
+        if not replied_to_message:
+            await self._handle_text_or_image_response(message, is_autonomous=False)
             return
 
+        user_name_to_use = await self.bot.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
+        
+        reply_prompt = (
+            f"{self.bot.personality_instruction}\n\n"
+            f"# --- CONVERSATION CONTEXT ---\n"
+            f"You previously said: \"{replied_to_message.content}\"\n"
+            f"The user '{user_name_to_use}' has now directly replied to you with: \"{message.content}\"\n\n"
+            f"# --- YOUR TASK ---\n"
+            f"Based on this direct reply, generate a short, in-character response. Your mood is '{self.bot.current_mood}'."
+        )
+
+        try:
+            response = await self.bot.gemini_client.aio.models.generate_content(
+                model=self.bot.MODEL_NAME,
+                contents=[reply_prompt],
+                config=self.text_gen_config
+            )
+            if response.text:
+                cleaned_response = response.text.strip()
+                if cleaned_response and cleaned_response.lower() != '[silence]':
+                    for chunk in self.bot.split_message(cleaned_response):
+                        await message.channel.send(chunk.lower())
+        except Exception:
+            logging.error("Failed to handle direct reply.", exc_info=True)
+            await message.channel.send("my brain just shorted out for a second, what were we talkin about?")
+
+    async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False, summary: str = ""):
+        if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
             user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
             
@@ -410,39 +439,15 @@ class VinnyLogic(commands.Cog):
                 types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
                 types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
             ]
-            raw_history_text_for_summary = []
             async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH):
-                if msg.id == message.id:
-                    continue
-                
+                if msg.id == message.id: continue
                 history.append(types.Content(
                     role="model" if msg.author == self.bot.user else "user",
                     parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]
                 ))
-                raw_history_text_for_summary.append(f"{msg.author.display_name}: {msg.content}")
-
             history.reverse()
-            raw_history_text_for_summary.reverse()
 
-            # --- 3. NEW: Get a summary of the immediate conversation ---
-            immediate_context_summary = ""
-            if raw_history_text_for_summary:
-                try:
-                    summary_prompt_text = (
-                        "You are a conversation analysis tool. Read the following chat log and provide a one-sentence summary of the current topic or situation.\n\n"
-                        "## CHAT LOG:\n"
-                        f"{' \n'.join(raw_history_text_for_summary)}\n\n"
-                        "## SUMMARY:"
-                    )
-                    response = await self.bot.gemini_client.aio.models.generate_content(
-                        model=self.bot.MODEL_NAME,
-                        contents=[summary_prompt_text]
-                    )
-                    immediate_context_summary = f"\n# --- CURRENT CONVERSATION SUMMARY ---\nThe current topic is: {response.text.strip()}\n"
-                except Exception:
-                    logging.warning("Failed to generate immediate conversation summary.", exc_info=True)
-
-            # --- 4. Get Long-Term Memories ---
+            # --- 3. Get Long-Term Memories ---
             relevant_memories_string = ""
             if guild_id:
                 try:
@@ -454,38 +459,36 @@ class VinnyLogic(commands.Cog):
                         memories = await self.bot.firestore_service.retrieve_relevant_memories(guild_id, keywords, limit=2)
                         if memories:
                             formatted_memories = "\n".join([f"- {m.get('summary', 'something i forgot')}" for m in memories])
-                            relevant_memies_string = f"\n# --- RELEVANT LONG-TERM MEMORIES ---\nHere are summaries of past conversations that might be relevant:\n{formatted_memories}\n"
+                            relevant_memories_string = f"\n# --- RELEVANT LONG-TERM MEMORIES ---\nHere are summaries of past conversations that might be relevant:\n{formatted_memories}\n"
                 except Exception:
                     logging.error("Failed to retrieve or process long-term memories.", exc_info=True)
 
-            # --- 5. Construct the Final Prompt ---
+            # --- 4. Construct the Final Prompt ---
             prompt_parts = [types.Part(text=message.content)]
             if message.attachments:
                 for attachment in message.attachments:
                     if "image" in attachment.content_type:
-                        prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read())))
-                        break
+                        prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read()))); break
             
             final_instruction_text = (
                 f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}.\n"
                 f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
-                f"{immediate_context_summary}"
                 f"{relevant_memories_string}"
-                f"Based on all this context (facts, current topic, and long-term memories), respond to the last message."
+                f"Based on all this context (facts and long-term memories), respond to their last message."
+                f"**Pay close attention to who said what in the chat history to avoid confusing speakers.**"
             )
 
-            if is_autonomous:
+            if is_autonomous and summary:
                 final_instruction_text = (
-                    f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation. "
-                    f"Comment on the last message, which was from '{user_name_to_use}'.\n"
-                    f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
-                    f"{immediate_context_summary}"
+                    f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation.\n"
+                    f"The current topic is: '{summary}'.\n"
                     f"{relevant_memories_string}"
+                    f"Make a chaotic, funny, or flirty comment about this topic, possibly connecting it to a long-term memory."
                 )
-
+            
             history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text), *prompt_parts]))
 
-            # --- 6. Generate and Send Response ---
+            # --- 5. Generate and Send Response ---
             config = self.text_gen_config
             if "?" in message.content and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                 config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
@@ -501,7 +504,7 @@ class VinnyLogic(commands.Cog):
                 if cleaned_response and cleaned_response.lower() != '[silence]':
                     for chunk in self.bot.split_message(cleaned_response):
                         await message.channel.send(chunk.lower())
-    
+
     async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
         user_id = str(target_user.id)
         guild_id = str(message.guild.id) if message.guild else None
