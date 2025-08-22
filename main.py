@@ -54,34 +54,28 @@ def setup_logging():
 setup_logging()
 
 # --- Standalone Fact Extraction Function ---
-async def extract_facts_from_message(bot_instance, user_message: str):
+async def extract_facts_from_message(bot_instance, message: discord.Message):
     """
     Analyzes a user message to extract personal facts using the bot's Gemini client.
-    This is a standalone function to prevent 'self' scope issues.
     """
+    # We now pass the author's display name directly into the prompt
+    user_name = message.author.display_name
+    user_message = message.content
+
     fact_extraction_prompt = (
-        "You are a highly accurate and semantic fact-extraction system. Your task is to analyze a user message "
-        "and identify any personal facts, preferences, or descriptions. Your output must be a valid JSON object.\n\n"
+        f"You are a highly accurate fact-extraction system. The user '{user_name}' wrote the following message. "
+        "Your task is to analyze the message and identify any personal facts about the subject of the sentence. "
+        "Your output must be a valid JSON object.\n\n"
         "## Rules:\n"
-        "1.  **Identify the Subject:** The subject can be a name or a pronoun. The subject is NEVER part of the key.\n"
-        "2.  **Determine the Key:** The key for the JSON object should be a descriptive noun or attribute (e.g., 'pet', 'favorite color', 'hometown', 'relationship'). AVOID using generic verbs like 'has', 'is', or 'are' as the key when a better noun is available.\n"
+        "1.  **Identify the Subject:** The subject of the fact could be the author ('I', 'my') or another person mentioned in the text. The author's name is '{user_name}'.\n"
+        "2.  **Determine the Key:** The key for the JSON object should be a descriptive noun or attribute (e.g., 'pet', 'favorite color', 'hometown').\n"
         "3.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective.\n"
         "4.  **Return JSON:** If no facts are found, return an empty JSON object: {}.\n\n"
         "## Examples:\n"
-        "-   **Input:** '⋆˚☆⋆｡𖦹°‧★｡⋆ smells like seaweed'\n"
-        "-   **Output:** {\"smells like\": \"seaweed\"}\n\n"
-        "-   **Input:** 'I have a cat named chumba'\n"
-        "-   **Analysis:** Subject is 'I'. A better key is 'pet'.\n"
-        "-   **Output:** {\"pet\": \"a cat named chumba\"}\n\n"
-        "-   **Input:** 'enraged is my boyfriend'\n"
-        "-   **Analysis:** Subject is 'enraged'. A better key is 'relationship'. The value should note who they are in a relationship with.\n"
-        "-   **Output:** {\"relationship\": \"is their boyfriend\"}\n\n"
-        "-   **Input:** 'I miss my little brother'\n"
-        "-   **Output:** {\"misses\": \"their little brother\"}\n\n"
-        "-   **Input:** 'my favorite color is blue'\n"
-        "-   **Output:** {\"favorite color\": \"blue\"}\n\n"
-        "## User Message to Analyze:\n"
-        f"\"{user_message}\""
+        "-   Author: 'Mouse', Message: 'I have a cat named chumba' -> {\"pet\": \"a cat named chumba\"}\n"
+        "-   Author: 'Mouse', Message: 'enraged is my boyfriend' -> {\"relationship\": \"is their boyfriend\"}\n\n"
+        f"## User Message to Analyze:\n"
+        f"Author: '{user_name}', Message: \"{user_message}\""
     )
     try:
         response = await bot_instance.gemini_client.aio.models.generate_content(
@@ -97,7 +91,6 @@ async def extract_facts_from_message(bot_instance, user_message: str):
     except Exception:
         logging.error(f"Fact extraction from message failed.", exc_info=True)
     return None
-
 
 class VinnyBot(commands.Bot):
 

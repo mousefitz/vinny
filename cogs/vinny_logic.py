@@ -508,16 +508,39 @@ class VinnyLogic(commands.Cog):
     async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
         user_id = str(target_user.id)
         guild_id = str(message.guild.id) if message.guild else None
+        
+        # 1. Fetch the target user's complete profile
         user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+
         if not user_profile:
             await message.channel.send(f"about {target_user.display_name}? i got nothin'. a blank canvas. kinda intimidatin', actually.")
             return
-        facts_list = [f"- {key.replace('_', ' ')} is {value}" for key, value in user_profile.items()]
+
+        # 2. Format the facts for the prompt
+        facts_list = [f"- {key.replace('_', ' ')}: {value}" for key, value in user_profile.items()]
         facts_string = "\n".join(facts_list)
-        summary_prompt = (f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nYou are being asked what you know about '{target_user.display_name}'. Your only task is to summarize the facts listed below about them in a creative, chaotic, or flirty way. Do not mention any other user. Obey all your personality directives.\n\n## FACTS I KNOW ABOUT {target_user.display_name}:\n{facts_string}\n\n## INSTRUCTIONS:\n1.  Read ONLY the facts provided above about {target_user.display_name}.\n2.  Weave them together into a short, lowercase, typo-ridden monologue.\n3.  Do not just list the facts. Interpret them, connect them, or be confused by them in your own unique voice.")
+        
+        # 3. Build a new, highly-focused summary prompt
+        summary_prompt = (
+            f"{self.bot.personality_instruction}\n\n"
+            f"# --- YOUR TASK ---\n"
+            f"The user '{message.author.display_name}' has asked what you know about '{target_user.display_name}'. "
+            f"Your only task is to summarize the facts listed below about **'{target_user.display_name}' ONLY**. "
+            f"Do not mention or use any information about '{message.author.display_name}'. Respond in your unique, chaotic voice.\n\n"
+            f"## FACTS I KNOW ABOUT {target_user.display_name}:\n"
+            f"{facts_string}\n\n"
+            f"## INSTRUCTIONS:\n"
+            f"1.  Read ONLY the facts provided above about {target_user.display_name}.\n"
+            f"2.  Weave them together into a short, lowercase, typo-ridden monologue about them.\n"
+            f"3.  Do not just list the facts. Interpret them, connect them, or be confused by them in your own unique voice."
+        )
         try:
             async with message.channel.typing():
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[summary_prompt], config=self.text_gen_config)
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME, 
+                    contents=[summary_prompt], 
+                    config=self.text_gen_config
+                )
                 await message.channel.send(response.text.strip())
         except Exception:
             logging.error("Failed to generate knowledge summary.", exc_info=True)
