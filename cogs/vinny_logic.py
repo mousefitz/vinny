@@ -487,12 +487,21 @@ class VinnyLogic(commands.Cog):
                         prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read()))); break
             
             final_instruction_text = (
-                f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}.\n"
+                f"Your mood is {self.bot.current_mood}. You are replying to '{user_name_to_use}'.\n"
+                f"**IMPORTANT: Your response should be directed at '{user_name_to_use}'. "
+                f"Review the facts and memories below to ensure your response is relevant to them and not another user.**\n\n"
                 f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
                 f"{relevant_memories_string}"
-                f"Based on all this context (facts and long-term memories), respond to their last message."
-                f"**Pay close attention to who said what in the chat history to avoid confusing speakers.**"
+                f"Based on all this context, respond to their last message."
             )
+
+            if is_autonomous and summary:
+                final_instruction_text = (
+                    f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation.\n"
+                    f"The current topic is: '{summary}'.\n"
+                    f"{relevant_memories_string}"
+                    f"Make a chaotic, funny, or flirty comment about this topic."
+                )
 
             if is_autonomous and summary:
                 final_instruction_text = (
