@@ -58,7 +58,7 @@ async def extract_facts_from_message(bot_instance, message: discord.Message):
     """
     Analyzes a user message to extract personal facts using the bot's Gemini client.
     """
-    # We now pass the author's display name directly into the prompt
+    # Now that we have the full message object, we can get the author and content
     user_name = message.author.display_name
     user_message = message.content
 

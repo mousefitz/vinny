@@ -218,7 +218,7 @@ class VinnyLogic(commands.Cog):
                         await self._handle_text_or_image_response(message, is_autonomous=is_autonomous, summary=summary)
                 
                 if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
-                    if extracted_facts := await extract_facts_from_message(self.bot, message.content):
+                    if extracted_facts := await extract_facts_from_message(self.bot, message):
                         for key, value in extracted_facts.items():
                             await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
             
