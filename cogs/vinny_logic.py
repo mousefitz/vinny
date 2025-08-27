@@ -445,75 +445,58 @@ class VinnyLogic(commands.Cog):
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
             user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
             
-            # --- 1. Get User Profile ---
             user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id) or {}
             profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
             user_name_to_use = await self.bot.firestore_service.get_user_nickname(user_id) or message.author.display_name
 
-            # --- 2. Get Short-Term Chat History ---
             history = [
                 types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
                 types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
             ]
             async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH):
                 if msg.id == message.id: continue
+                # We simplify history to be text-only to avoid complexity
                 history.append(types.Content(
                     role="model" if msg.author == self.bot.user else "user",
                     parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]
                 ))
             history.reverse()
 
-            # --- 3. Get Long-Term Memories ---
-            relevant_memories_string = ""
-            if guild_id:
-                try:
-                    keyword_prompt = f"Extract 3-5 key nouns or topics from the following message. Return them as a comma-separated list. Message: \"{message.content}\""
-                    response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[keyword_prompt])
-                    keywords = [k.strip() for k in response.text.split(',')]
-                    
-                    if keywords:
-                        memories = await self.bot.firestore_service.retrieve_relevant_memories(guild_id, keywords, limit=2)
-                        if memories:
-                            formatted_memories = "\n".join([f"- {m.get('summary', 'something i forgot')}" for m in memories])
-                            relevant_memories_string = f"\n# --- RELEVANT LONG-TERM MEMORIES ---\nHere are summaries of past conversations that might be relevant:\n{formatted_memories}\n"
-                except Exception:
-                    logging.error("Failed to retrieve or process long-term memories.", exc_info=True)
+            # --- CORRECTED MULTIMODAL LOGIC ---
+            # 1. Start building the parts for the final prompt
+            prompt_parts = []
+            
+            # 2. Add the user's text content first
+            prompt_parts.append(types.Part(text=message.content))
 
-            # --- 4. Construct the Final Prompt ---
-            prompt_parts = [types.Part(text=message.content)]
+            # 3. If there's an image, add it as a separate part
             if message.attachments:
                 for attachment in message.attachments:
                     if "image" in attachment.content_type:
-                        prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=await attachment.read()))); break
-            
-            final_instruction_text = (
-                f"Your mood is {self.bot.current_mood}. You are replying to '{user_name_to_use}'.\n"
-                f"**IMPORTANT: Your response should be directed at '{user_name_to_use}'. "
-                f"Review the facts and memories below to ensure your response is relevant to them and not another user.**\n\n"
-                f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
-                f"{relevant_memories_string}"
-                f"Based on all this context, respond to their last message."
-            )
+                        image_bytes = await attachment.read()
+                        prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
+                        break # Only process the first image
 
+            # 4. Construct the final instruction prompt text
+            final_instruction_text = (
+                f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}.\n"
+                f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
+                f"Based on all this context, respond to their last message (which may include an image)."
+            )
             if is_autonomous and summary:
                 final_instruction_text = (
                     f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation.\n"
                     f"The current topic is: '{summary}'.\n"
-                    f"{relevant_memories_string}"
                     f"Make a chaotic, funny, or flirty comment about this topic."
                 )
 
-            if is_autonomous and summary:
-                final_instruction_text = (
-                    f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation.\n"
-                    f"The current topic is: '{summary}'.\n"
-                    f"{relevant_memories_string}"
-                    f"Make a chaotic, funny, or flirty comment about this topic, possibly connecting it to a long-term memory."
-                )
+            # 5. Prepend the main instructions to the parts list
+            prompt_parts.insert(0, types.Part(text=final_instruction_text))
             
-            history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text), *prompt_parts]))
-
-            # --- 5. Generate and Send Response ---
+            # 6. Add the final prompt to the history
+            history.append(types.Content(role='user', parts=prompt_parts))
+            
+            # --- API Call Logic ---
             config = self.text_gen_config
             if "?" in message.content and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
                 config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
