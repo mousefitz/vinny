@@ -97,7 +97,7 @@ async def get_full_weather_forecast(http_session: aiohttp.ClientSession, api_key
     }
     
     try:
-        async with http_session.get("https://api.openweathermap.org/data/3.0/onecall", params=params) as response:
+        async with http_session.get("https://api.openweathermap.org/data/2.5/onecall", params=params) as response:
             if response.status == 200:
                 return await response.json()
     except Exception:

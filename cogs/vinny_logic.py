@@ -815,6 +815,7 @@ class VinnyLogic(commands.Cog):
             embed1.add_field(name="🤔 Feels Like", value=f"{current.get('feels_like'):.0f}°F", inline=True)
             embed1.add_field(name="💧 Humidity", value=f"{current.get('humidity')}%", inline=True)
             embed1.add_field(name="💨 Wind", value=f"{current.get('wind_speed'):.0f} mph", inline=True)
+            embed1.add_field(name="📡 Live Radar", value=f"[Click to View](https://www.windy.com/{coords['lat']}/{coords['lon']})", inline=False)
             embed1.set_footer(text="Page 1 of 2 | don't blame me if the sky starts lyin'. salute!")
             embeds.append(embed1)
         except (KeyError, IndexError):
