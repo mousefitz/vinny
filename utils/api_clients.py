@@ -83,6 +83,31 @@ async def get_weather_data(http_session: aiohttp.ClientSession, api_key: str, la
         logging.error("Weather data API call failed.", exc_info=True)
     return None
 
+# --- Extended Forecast ---
+
+async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, lat: float, lon: float):
+    """Gets a 5-day forecast (in 3-hour intervals) from the standard free endpoint."""
+    if not api_key: return None
+    
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "appid": api_key,
+        "units": "imperial",
+    }
+    
+    try:
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        async with http_session.get(url, params=params) as response:
+            if response.status == 200:
+                return await response.json()
+            else:
+                error_text = await response.text()
+                logging.error(f"OpenWeatherMap 5-Day Forecast API returned non-200 status: {response.status} | Body: {error_text}")
+    except Exception:
+        logging.error("5-Day Forecast API call failed.", exc_info=True)
+    return None
+
 # --- Horoscope API ---
 async def get_horoscope(http_session: aiohttp.ClientSession, sign: str):
     if not http_session: return None
