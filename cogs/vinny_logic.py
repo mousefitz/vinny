@@ -151,27 +151,41 @@ class VinnyLogic(commands.Cog):
             # --- High-priority pre-checks ---
             if await self._is_a_correction(message):
                 return await self._handle_correction(message)
+            # This handles native replies to images
             if message.reference and self.bot.user.mentioned_in(message):
                 original_message = await message.channel.fetch_message(message.reference.message_id)
-                if original_message.attachments and "image" in original_message.attachments[0].content_type: return await self._handle_image_reply(message, original_message)
+                if original_message.attachments and "image" in original_message.attachments[0].content_type: 
+                    return await self._handle_image_reply(message, original_message)
             
-            # --- Determine how to handle the message ---
+            # --- NEW: Handles simple pings to the preceding image ---
+            cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+            if not cleaned_content and self.bot.user.mentioned_in(message): # It's just a ping
+                async for last_message in message.channel.history(limit=1, before=message):
+                    if last_message.attachments and "image" in last_message.attachments[0].content_type:
+                        # If the last message had an image, treat this as an image reply
+                        return await self._handle_image_reply(message, last_message)
+
+            # --- Logic to specifically handle direct replies and mention-replies ---
             bot_names = ["vinny", "vincenzo", "vin vin"]
             is_native_reply = message.reference and (await message.channel.fetch_message(message.reference.message_id)).author == self.bot.user
-            is_mention = self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names)
-            is_autonomous = self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance and not is_mention and not is_native_reply
-            is_dm = message.guild is None
+            is_mention_reply = message.content.lower().startswith(tuple(f"{name} " for name in bot_names)) or message.content.lower().startswith(f'<@{self.bot.user.id}> ')
 
-            # --- Main Logic Branch ---
-            if is_native_reply:
-                # Handle only native Discord replies with the focused context handler
+            if is_native_reply or is_mention_reply:
                 await self.update_vinny_mood()
                 async with message.channel.typing():
                     await self._handle_direct_reply(message)
+                return
 
-            elif is_mention or is_autonomous or is_dm:
-                # Handle all other interactions (mentions, DMs, autonomous) with the smart router
-                await self.update_vinny_mood()
+            # --- Autonomous and General Chat Logic ---
+            should_respond, is_autonomous = False, False
+            if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
+                should_respond = True
+            elif self.bot.autonomous_mode_enabled and message.guild and random.random() < self.bot.autonomous_reply_chance:
+                should_respond, is_autonomous = True, True
+            elif message.guild is None:
+                should_respond = True
+
+            if should_respond:
                 user_sentiment = await get_message_sentiment(self.bot, message.content)
                 sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
                 score_change = sentiment_score_map.get(user_sentiment, 0)
@@ -179,49 +193,25 @@ class VinnyLogic(commands.Cog):
                     new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
                     await self._update_relationship_status(str(message.author.id), str(message.guild.id), new_total_score)
                 await self.update_mood_based_on_sentiment(user_sentiment)
+                await self.update_vinny_mood()
+                
+                summary = ""
+                if is_autonomous and message.guild:
+                    message_history = []
+                    async for msg in message.channel.history(limit=5):
+                        message_history.append(f"{msg.author.display_name}: {msg.content}")
+                    message_history.reverse()
+                    summary = await get_short_term_summary(self.bot, message_history)
                 
                 async with message.channel.typing():
-                    intent, args = await get_intent_from_prompt(self.bot, message)
-
-                    if intent == "generate_image":
-                        prompt = args.get("prompt", "something vague")
-                        if prompt.lower() == "me": await self._handle_paint_me_request(message)
-                        else: await self._handle_image_request(message, prompt)
-                    elif intent == "get_weather":
-                        ctx = await self.bot.get_context(message)
-                        await self.weather_command.callback(self, ctx, location=args.get("location", ""))
-                    elif intent == "get_user_knowledge":
-                        target_name = args.get("target_user", "me")
-                        target_user = None
-                        if target_name.lower() == 'me': target_user = message.author
-                        elif message.mentions: target_user = message.mentions[0]
-                        elif message.guild:
-                            target_user = discord.utils.find(lambda m: m.display_name.lower() == target_name.lower() or m.name.lower() == target_name.lower(), message.guild.members)
-                            if not target_user: target_user = await self._find_user_by_vinny_name(message.guild, target_name)
-                        if target_user: await self._handle_knowledge_request(message, target_user)
-                        else: await message.channel.send(f"who? couldn't find anyone named '{target_name}'.")
-                    elif intent == "tag_user":
-                        user_to_tag = args.get("user_to_tag", "")
-                        times = args.get("times_to_tag", 1)
-                        await self.find_and_tag_member(message, user_to_tag, times)
-                    elif intent == "get_my_name":
-                        name = await self.bot.firestore_service.get_user_nickname(str(message.author.id))
-                        await message.channel.send(f"they call ya {name}, right?" if name else "i got nothin'.")
-                    elif intent == "general_conversation":
-                        summary = ""
-                        if is_autonomous and message.guild:
-                            message_history = []
-                            async for msg in message.channel.history(limit=5):
-                                message_history.append(f"{msg.author.display_name}: {msg.content}")
-                            message_history.reverse()
-                            summary = await get_short_term_summary(self.bot, message_history)
-                        await self._handle_text_or_image_response(message, is_autonomous=is_autonomous, summary=summary)
+                    await self._handle_text_or_image_response(
+                        message, is_autonomous=is_autonomous, summary=summary
+                    )
                 
                 if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
                     if extracted_facts := await extract_facts_from_message(self.bot, message):
                         for key, value in extracted_facts.items():
                             await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
-            
             else:
                 # --- Passive Reaction Logic ---
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
