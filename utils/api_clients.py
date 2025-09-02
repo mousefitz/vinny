@@ -87,7 +87,6 @@ async def get_full_weather_forecast(http_session: aiohttp.ClientSession, api_key
     """Gets a full forecast using the One Call API."""
     if not api_key: return None
     
-    # This API call excludes minutely and hourly data to keep it simple
     params = {
         "lat": lat,
         "lon": lon,
@@ -96,10 +95,19 @@ async def get_full_weather_forecast(http_session: aiohttp.ClientSession, api_key
         "exclude": "minutely,hourly"
     }
     
+    # We will use the 2.5 endpoint as it's the most common for free keys
+    url = "https://api.openweathermap.org/data/2.5/onecall"
+    
     try:
-        async with http_session.get("https://api.openweathermap.org/data/2.5/onecall", params=params) as response:
+        async with http_session.get(url, params=params) as response:
+            # --- NEW DEBUGGING LOGIC ---
             if response.status == 200:
                 return await response.json()
+            else:
+                # Log the exact error from the API if the request fails
+                error_text = await response.text()
+                logging.error(f"OpenWeatherMap API returned non-200 status: {response.status} | Body: {error_text}")
+                return None # Ensure we return None on failure
     except Exception:
         logging.error("One Call weather API call failed.", exc_info=True)
     return None
