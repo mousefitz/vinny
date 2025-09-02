@@ -779,97 +779,28 @@ class VinnyLogic(commands.Cog):
 
     @commands.command(name='weather')
     async def weather_command(self, ctx, *, location: str):
-        """Gets the current weather and extended forecast for a location."""
+        """Gets the current weather for a specific location and displays it in an embed."""
         async with ctx.typing():
             coords = await api_clients.geocode_location(self.bot.http_session, self.bot.OPENWEATHER_API_KEY, location)
-            if not coords:
-                return await ctx.send(f"eh, couldn't find that place '{location}'. you sure that's a real place?")
-            
-            # Call our new function to get the full forecast
-            forecast_data = await api_clients.get_full_weather_forecast(
-                self.bot.http_session, self.bot.OPENWEATHER_API_KEY, coords['lat'], coords['lon']
-            )
-
-        if not forecast_data:
+            if not coords: return await ctx.send(f"eh, couldn't find that place '{location}'. you sure that's a real place?")
+            weather_data = await api_clients.get_weather_data(self.bot.http_session, self.bot.OPENWEATHER_API_KEY, coords['lat'], coords['lon'])
+        if not weather_data or weather_data.get("cod") != 200:
             return await ctx.send("found the place but the damn weather report is all garbled.")
-
-        # --- Create Embeds ---
-        city_name = coords.get("name", "Unknown Location")
-        embeds = []
-
-        # Page 1: Current Weather
         try:
-            current = forecast_data["current"]
-            today_daily = forecast_data["daily"][0]
-            main_weather = current["weather"][0]
+            city_name = coords.get("name", weather_data.get("name", "Unknown Location"))
+            main_weather = weather_data["weather"][0]
             emoji = constants.get_weather_emoji(main_weather['main'])
-            
-            embed1 = discord.Embed(
-                title=f"{emoji} Weather in {city_name}",
-                description=f"**{main_weather.get('description', '').title()}**",
-                color=discord.Color.blue()
-            )
-            embed1.add_field(name="🌡️ Now", value=f"{current.get('temp'):.0f}°F", inline=True)
-            embed1.add_field(name="🔼 High", value=f"{today_daily['temp'].get('max'):.0f}°F", inline=True)
-            embed1.add_field(name="🔽 Low", value=f"{today_daily['temp'].get('min'):.0f}°F", inline=True)
-            embed1.add_field(name="🤔 Feels Like", value=f"{current.get('feels_like'):.0f}°F", inline=True)
-            embed1.add_field(name="💧 Humidity", value=f"{current.get('humidity')}%", inline=True)
-            embed1.add_field(name="💨 Wind", value=f"{current.get('wind_speed'):.0f} mph", inline=True)
-            embed1.add_field(name="📡 Live Radar", value=f"[Click to View](https://www.windy.com/{coords['lat']}/{coords['lon']})", inline=False)
-            embed1.set_footer(text="Page 1 of 2 | don't blame me if the sky starts lyin'. salute!")
-            embeds.append(embed1)
-        except (KeyError, IndexError):
-            return await ctx.send("failed to parse the current weather data. weird.")
-
-        # Page 2: Extended Forecast
-        try:
-            embed2 = discord.Embed(
-                title=f"🗓️ Extended Forecast for {city_name}",
-                color=discord.Color.dark_blue()
-            )
-            # Get the forecast for the next 5 days (starting from tomorrow)
-            for day_data in forecast_data["daily"][1:6]:
-                day_name = datetime.datetime.fromtimestamp(day_data['dt']).strftime('%A')
-                emoji = constants.get_weather_emoji(day_data['weather'][0]['main'])
-                high = f"{day_data['temp'].get('max'):.0f}°F"
-                low = f"{day_data['temp'].get('min'):.0f}°F"
-                embed2.add_field(
-                    name=f"**{day_name}**",
-                    value=f"{emoji} {high} / {low}",
-                    inline=False
-                )
-            embed2.set_footer(text="Page 2 of 2 | don't blame me if the sky starts lyin'. salute!")
-            embeds.append(embed2)
-        except (KeyError, IndexError):
-            pass # If forecast fails, we can still show the first page
-
-        # --- Create View with Buttons ---
-        class WeatherView(discord.ui.View):
-            def __init__(self, embeds):
-                super().__init__(timeout=60)
-                self.embeds = embeds
-                self.current_page = 0
-
-            @discord.ui.button(label="Previous", style=discord.ButtonStyle.grey, disabled=True)
-            async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                self.current_page -= 1
-                await self.update_message(interaction)
-
-            @discord.ui.button(label="Next", style=discord.ButtonStyle.blurple)
-            async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-                self.current_page += 1
-                await self.update_message(interaction)
-
-            async def update_message(self, interaction: discord.Interaction):
-                # Update button states
-                self.children[0].disabled = self.current_page == 0
-                self.children[1].disabled = self.current_page == len(self.embeds) - 1
-                # Edit the message with the new embed and view
-                await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
-
-        if embeds:
-            await ctx.send(embed=embeds[0], view=WeatherView(embeds))
-        else:
+            embed = discord.Embed(title=f"{emoji} Weather in {city_name}", description=f"**{main_weather.get('description', '').title()}**", color=discord.Color.blue())
+            embed.add_field(name="🌡️ Temperature", value=f"{weather_data['main'].get('temp')}°F", inline=True)
+            embed.add_field(name="🤔 Feels Like", value=f"{weather_data['main'].get('feels_like')}°F", inline=True)
+            embed.add_field(name="💧 Humidity", value=f"{weather_data['main'].get('humidity')}%", inline=True)
+            embed.add_field(name="💨 Wind", value=f"{weather_data['wind'].get('speed')} mph", inline=True)
+            embed.add_field(name="📡 Live Radar", value=f"[Click to View](https://www.windy.com/{coords['lat']}/{coords['lon']})", inline=False)
+            embed.set_footer(text="don't blame me if the sky starts lyin'. salute!")
+            embed.timestamp = datetime.datetime.now(datetime.UTC)
+            await ctx.send(embed=embed)
+        except Exception:
+            logging.error("Failed to create weather embed.", exc_info=True)
             await ctx.send("somethin' went wrong with the damn weather machine.")
 
     @commands.command(name='horoscope')
