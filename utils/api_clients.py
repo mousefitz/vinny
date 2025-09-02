@@ -83,6 +83,27 @@ async def get_weather_data(http_session: aiohttp.ClientSession, api_key: str, la
         logging.error("Weather data API call failed.", exc_info=True)
     return None
 
+async def get_full_weather_forecast(http_session: aiohttp.ClientSession, api_key: str, lat: float, lon: float):
+    """Gets a full forecast using the One Call API."""
+    if not api_key: return None
+    
+    # This API call excludes minutely and hourly data to keep it simple
+    params = {
+        "lat": lat,
+        "lon": lon,
+        "appid": api_key,
+        "units": "imperial",
+        "exclude": "minutely,hourly"
+    }
+    
+    try:
+        async with http_session.get("https://api.openweathermap.org/data/3.0/onecall", params=params) as response:
+            if response.status == 200:
+                return await response.json()
+    except Exception:
+        logging.error("One Call weather API call failed.", exc_info=True)
+    return None
+
 # --- Horoscope API ---
 async def get_horoscope(http_session: aiohttp.ClientSession, sign: str):
     if not http_session: return None
