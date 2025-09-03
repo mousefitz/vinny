@@ -147,6 +147,7 @@ class VinnyLogic(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        bot_names = ["vinny", "vincenzo", "vin vin"]
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
@@ -166,17 +167,13 @@ class VinnyLogic(commands.Cog):
                     if last_message.attachments and "image" in last_message.attachments[0].content_type:
                         # If the last message had an image, treat this as an image reply
                         return await self._handle_image_reply(message, last_message)
-
-            # --- Logic to specifically handle direct replies and mention-replies ---
-            bot_names = ["vinny", "vincenzo", "vin vin"]
-            is_native_reply = message.reference and (await message.channel.fetch_message(message.reference.message_id)).author == self.bot.user
-            is_mention_reply = message.content.lower().startswith(tuple(f"{name} " for name in bot_names)) or message.content.lower().startswith(f'<@{self.bot.user.id}> ')
-
-            if is_native_reply or is_mention_reply:
-                await self.update_vinny_mood()
-                async with message.channel.typing():
-                    await self._handle_direct_reply(message)
-                return
+            if message.reference:
+                ref_message = await message.channel.fetch_message(message.reference.message_id)
+                if ref_message.author == self.bot.user:
+                    await self.update_vinny_mood()
+                    async with message.channel.typing():
+                        await self._handle_direct_reply(message)
+                    return
 
             # --- Autonomous and General Chat Logic ---
             should_respond, is_autonomous = False, False
