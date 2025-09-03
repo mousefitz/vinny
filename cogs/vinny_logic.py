@@ -188,27 +188,58 @@ class VinnyLogic(commands.Cog):
                 should_respond = True
 
             if should_respond:
-                user_sentiment = await get_message_sentiment(self.bot, message.content)
-                sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
-                score_change = sentiment_score_map.get(user_sentiment, 0)
-                if message.guild:
-                    new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
-                    await self._update_relationship_status(str(message.author.id), str(message.guild.id), new_total_score)
-                await self.update_mood_based_on_sentiment(user_sentiment)
-                await self.update_vinny_mood()
-                
-                summary = ""
-                if is_autonomous and message.guild:
-                    message_history = []
-                    async for msg in message.channel.history(limit=5):
-                        message_history.append(f"{msg.author.display_name}: {msg.content}")
-                    message_history.reverse()
-                    summary = await get_short_term_summary(self.bot, message_history)
-                
+                intent, args = await get_intent_from_prompt(self.bot, message)
+
                 async with message.channel.typing():
-                    await self._handle_text_or_image_response(
-                        message, is_autonomous=is_autonomous, summary=summary
-                    )
+                    if intent == "generate_image":
+                        prompt = args.get("prompt", "something, i guess. they didn't say what.")
+                        await self._handle_image_request(message, prompt)
+                    
+                    elif intent == "get_user_knowledge":
+                        target_user_name = args.get("target_user")
+                        if target_user_name and message.guild:
+                            target_user = discord.utils.find(lambda m: target_user_name.lower() in m.display_name.lower(), message.guild.members)
+                            if target_user:
+                                await self._handle_knowledge_request(message, target_user)
+                            else:
+                                await message.channel.send(f"who? i looked all over, couldn't find anyone named '{target_user_name}'.")
+                        else:
+                            await self._handle_knowledge_request(message, message.author)
+
+                    elif intent == "tag_user":
+                        user_to_tag = args.get("user_to_tag")
+                        times = args.get("times_to_tag", 1)
+                        if user_to_tag:
+                            await self.find_and_tag_member(message, user_to_tag, times)
+                        else:
+                            await message.channel.send("ya gotta tell me who to tag, pal.")
+                    
+                    elif intent == "get_my_name":
+                         user_name_to_use = await self.bot.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
+                         await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
+
+                    else: # Fallback to general_conversation
+                        user_sentiment = await get_message_sentiment(self.bot, message.content)
+                        sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
+                        score_change = sentiment_score_map.get(user_sentiment, 0)
+                        if message.guild:
+                            new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
+                            await self._update_relationship_status(str(message.author.id), str(message.guild.id), new_total_score)
+                        
+                        await self.update_mood_based_on_sentiment(user_sentiment)
+                        await self.update_vinny_mood()
+                        
+                        summary = ""
+                        if is_autonomous and message.guild:
+                            message_history = []
+                            async for msg in message.channel.history(limit=5):
+                                message_history.append(f"{msg.author.display_name}: {msg.content}")
+                            message_history.reverse()
+                            summary = await get_short_term_summary(self.bot, message_history)
+                        
+                        await self._handle_text_or_image_response(
+                            message, is_autonomous=is_autonomous, summary=summary
+                        )
                 
                 if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
                     if extracted_facts := await extract_facts_from_message(self.bot, message):
