@@ -345,6 +345,8 @@ class VinnyLogic(commands.Cog):
             prompt_text += f" The painting's theme and background should be inspired by these traits: {other_desc}."
         await self._handle_image_request(message, prompt_text)
 
+    # cogs/vinny_logic.py
+
     async def _handle_image_request(self, message: discord.Message, image_prompt: str):
         async with message.channel.typing():
             thinking_message = "aight, lemme get my brushes..."
@@ -354,18 +356,38 @@ class VinnyLogic(commands.Cog):
                 if response.text: thinking_message = response.text.strip()
             except Exception as e: logging.warning(f"Failed to generate dynamic thinking message: {e}")
             await message.channel.send(thinking_message)
+
+            # +++ START: REVISED PROMPT REWRITER LOGIC +++
             prompt_rewriter_instruction = (
-                f"You are Vinny, an eccentric artist. A user wants you to paint a picture. Their request is: '{image_prompt}'.\n"
-                f"Your task is to rewrite this into a richer, more artistic prompt for an image AI.\n"
-                f"## VERY IMPORTANT RULE:\n"
-                f"**The final rewritten prompt MUST be about the user's original subject: '{image_prompt}'. DO NOT change, replace, or ignore this subject.**\n\n"
-                f"Enhance the prompt with artistic terms like 'oil on canvas', 'dramatic lighting', 'vibrant colors', but always keep the core subject intact."
+                "You are a prompt engineering assistant. Your task is to enhance a user's art request for an image AI. You must follow the rules strictly.\n\n"
+                "## Rules:\n"
+                "1.  Identify the CORE SUBJECT of the user's request. The core subject is the absolute, non-negotiable central theme.\n"
+                "2.  Enhance the prompt with artistic details (e.g., 'oil painting', 'dramatic lighting', 'impressionistic style').\n"
+                "3.  The enhanced prompt MUST contain the original CORE SUBJECT. Do not change, replace, or ignore it.\n\n"
+                f"## User Request:\n\"{image_prompt}\"\n\n"
+                "## Your Output:\n"
+                "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\".\n\n"
+                "## Example:\n"
+                "- User Request: \"a dog playing poker\"\n"
+                "- Your Output: ```json\n{\n  \"core_subject\": \"a dog playing poker\",\n  \"enhanced_prompt\": \"An oil painting in the style of Caravaggio, depicting several dogs playing a tense game of poker in a dimly lit, smoky room. Dramatic chiaroscuro lighting highlights the cards and the dogs' expressions.\"\n}\n```"
             )
             smarter_prompt = image_prompt
             try:
                 response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[prompt_rewriter_instruction], config=self.text_gen_config)
-                if response.text: smarter_prompt = response.text.strip()
-            except Exception as e: logging.warning(f"Failed to rewrite image prompt, using original.", exc_info=True)
+                # Updated logic to parse the JSON response
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
+                if json_match:
+                    json_string = json_match.group(1) or json_match.group(2)
+                    data = json.loads(json_string)
+                    # Fallback to the original prompt if the key is missing
+                    smarter_prompt = data.get("enhanced_prompt", image_prompt)
+                    logging.info(f"Rewrote prompt. Core subject: '{data.get('core_subject')}'")
+                else:
+                    logging.warning(f"Could not find JSON in prompt rewriter response. Using original prompt.")
+            except Exception as e: 
+                logging.warning(f"Failed to rewrite image prompt, using original.", exc_info=True)
+            # +++ END: REVISED PROMPT REWRITER LOGIC +++
+
             final_prompt = smarter_prompt
             try:
                 safety_check_prompt = (
@@ -381,6 +403,7 @@ class VinnyLogic(commands.Cog):
                     final_prompt = response.text.strip()
                     logging.info(f"Original prompt: '{smarter_prompt}' | Sanitized prompt: '{final_prompt}'")
             except Exception as e: logging.error("Failed to sanitize the image prompt.", exc_info=True)
+            
             image_file = await api_clients.generate_image_with_imagen(self.bot.http_session, self.bot.loop, final_prompt, self.bot.GCP_PROJECT_ID, self.bot.FIREBASE_B64)
             if image_file:
                 response_text = "here, i made this for ya."
@@ -400,11 +423,16 @@ class VinnyLogic(commands.Cog):
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
+    # cogs/vinny_logic.py
+
     async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
         try:
             image_attachment = original_message.attachments[0]
             image_bytes = await image_attachment.read()
-            user_comment = reply_message.content
+
+            # --- ADD THIS LINE TO CLEAN THE COMMENT ---
+            user_comment = re.sub(f'<@!?{self.bot.user.id}>', '', reply_message.content).strip()
+            
             prompt_text = (f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nA user, '{reply_message.author.display_name}', just replied to the attached image with the comment: \"{user_comment}\".\nYour task is to look at the image and respond to their comment in your unique, chaotic, and flirty voice. Obey all personality directives.")
             async with reply_message.channel.typing():
                 response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[prompt_text, image_bytes])
@@ -486,8 +514,11 @@ class VinnyLogic(commands.Cog):
             # 1. Start building the parts for the final prompt
             prompt_parts = []
             
-            # 2. Add the user's text content first
-            prompt_parts.append(types.Part(text=message.content))
+            # --- ADD THIS LINE TO CLEAN THE MESSAGE CONTENT ---
+            cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+            
+            # 2. Add the user's CLEANED text content first
+            prompt_parts.append(types.Part(text=cleaned_content))
 
             # 3. If there's an image, add it as a separate part
             if message.attachments:
