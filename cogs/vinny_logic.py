@@ -157,7 +157,9 @@ class VinnyLogic(commands.Cog):
             # This handles native replies to images
             if message.reference and self.bot.user.mentioned_in(message):
                 original_message = await message.channel.fetch_message(message.reference.message_id)
-                if original_message.attachments and "image" in original_message.attachments[0].content_type: 
+                # --- THIS IS THE UPDATED CHECK ---
+                if (original_message.attachments and "image" in original_message.attachments[0].content_type) or \
+                   (original_message.embeds and original_message.embeds[0].image):
                     return await self._handle_image_reply(message, original_message)
             
             # --- NEW: Handles simple pings to the preceding image ---
@@ -423,25 +425,42 @@ class VinnyLogic(commands.Cog):
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
+    # cogs/vinny_logic.py
+
     async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
         try:
-            image_attachment = original_message.attachments[0]
-            image_bytes = await image_attachment.read()
-            user_comment = re.sub(f'<@!?{self.bot.user.id}>', '', reply_message.content).strip()
+            image_url = None
+            mime_type = 'image/png'  # Default mime_type
 
+            # Find the image URL from either embeds or attachments
+            if original_message.embeds and original_message.embeds[0].image:
+                image_url = original_message.embeds[0].image.url
+            elif original_message.attachments and "image" in original_message.attachments[0].content_type:
+                image_attachment = original_message.attachments[0]
+                image_url = image_attachment.url
+                mime_type = image_attachment.content_type
+
+            if not image_url:
+                await reply_message.channel.send("i see the reply but somethin's wrong with the original picture, pal.")
+                return
+
+            # Download the image bytes from the URL
+            async with self.bot.http_session.get(image_url) as resp:
+                if resp.status != 200:
+                    await reply_message.channel.send("couldn't grab the picture, the link's all busted.")
+                    return
+                image_bytes = await resp.read()
+
+            user_comment = re.sub(f'<@!?{self.bot.user.id}>', '', reply_message.content).strip()
             prompt_text = (
-                f"{self.bot.personality_instruction}\n\n"
-                f"# --- YOUR TASK ---\n"
-                f"A user, '{reply_message.author.display_name}', just replied to the attached image with the comment: \"{user_comment}\".\n"
-                f"Your task is to look at the image and respond to their comment in your unique, chaotic, and flirty voice. Obey all personality directives."
+                f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nA user, '{reply_message.author.display_name}', "
+                f"just replied to the attached image with the comment: \"{user_comment}\".\nYour task is to look "
+                f"at the image and respond to their comment in your unique, chaotic, and flirty voice."
             )
             
             prompt_parts = [
                 types.Part(text=prompt_text),
-                types.Part(inline_data=types.Blob(
-                    mime_type=image_attachment.content_type, 
-                    data=image_bytes
-                ))
+                types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_bytes))
             ]
 
             async with reply_message.channel.typing():
@@ -718,6 +737,8 @@ class VinnyLogic(commands.Cog):
                     logging.info(f"Saved memory summary for guild '{guild.name}'.")
         logging.info("Memory scheduler finished.")
 
+    # cogs/vinny_logic.py
+
     async def find_and_tag_member(self, message, user_name: str, times: int = 1):
         MAX_TAGS = 5
         if times > MAX_TAGS:
@@ -728,9 +749,22 @@ class VinnyLogic(commands.Cog):
             await message.channel.send("eh, who am i supposed to tag out here? this is a private chat, pal.")
             return
         
-        target_member = discord.utils.find(lambda m: user_name.lower() in m.display_name.lower(), message.guild.members)
+        target_member = None
+        # --- START: NEW LOGIC TO HANDLE MENTIONS ---
+        # First, check if the user_name is a mention (e.g., <@12345...>)
+        match = re.match(r'<@!?(\d+)>', user_name)
+        if match:
+            user_id = int(match.group(1))
+            target_member = message.guild.get_member(user_id)
+        
+        # If we couldn't find a member by mention, then search by name
+        if not target_member:
+            target_member = discord.utils.find(lambda m: user_name.lower() in m.display_name.lower(), message.guild.members)
+        
+        # As a final fallback, search by Vinny's custom nicknames
         if not target_member:
             target_member = await self._find_user_by_vinny_name(message.guild, user_name)
+        # --- END: NEW LOGIC TO HANDLE MENTIONS ---
         
         if target_member:
             try:
