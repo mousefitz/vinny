@@ -423,21 +423,36 @@ class VinnyLogic(commands.Cog):
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
-    # cogs/vinny_logic.py
-
     async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
         try:
             image_attachment = original_message.attachments[0]
             image_bytes = await image_attachment.read()
-
-            # --- ADD THIS LINE TO CLEAN THE COMMENT ---
             user_comment = re.sub(f'<@!?{self.bot.user.id}>', '', reply_message.content).strip()
+
+            prompt_text = (
+                f"{self.bot.personality_instruction}\n\n"
+                f"# --- YOUR TASK ---\n"
+                f"A user, '{reply_message.author.display_name}', just replied to the attached image with the comment: \"{user_comment}\".\n"
+                f"Your task is to look at the image and respond to their comment in your unique, chaotic, and flirty voice. Obey all personality directives."
+            )
             
-            prompt_text = (f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nA user, '{reply_message.author.display_name}', just replied to the attached image with the comment: \"{user_comment}\".\nYour task is to look at the image and respond to their comment in your unique, chaotic, and flirty voice. Obey all personality directives.")
+            prompt_parts = [
+                types.Part(text=prompt_text),
+                types.Part(inline_data=types.Blob(
+                    mime_type=image_attachment.content_type, 
+                    data=image_bytes
+                ))
+            ]
+
             async with reply_message.channel.typing():
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[prompt_text, image_bytes])
+                response = await self.bot.gemini_client.aio.models.generate_content(
+                    model=self.bot.MODEL_NAME,
+                    contents=[types.Content(parts=prompt_parts)]
+                )
                 if response.text:
-                    for chunk in self.bot.split_message(response.text): await reply_message.channel.send(chunk.lower())
+                    for chunk in self.bot.split_message(response.text): 
+                        await reply_message.channel.send(chunk.lower())
+
         except Exception:
             logging.error("Failed to handle an image reply.", exc_info=True)
             await reply_message.channel.send("my eyes are all blurry, couldn't make out the picture, pal.")
