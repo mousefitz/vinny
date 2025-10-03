@@ -125,7 +125,7 @@ class VinnyBot(commands.Bot):
             sys.exit("Error: personality.txt not found.")
 
         # --- Bot State & Globals ---
-        self.MODEL_NAME = "gemini-2.5-flash"
+        self.MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 15
