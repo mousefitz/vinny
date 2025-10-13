@@ -16,9 +16,11 @@ from google.genai import types
 # Import from our new utility modules
 from utils import constants, api_clients
 
+# Import from our new utility module
+from utils.fact_extractor import extract_facts_from_message
+
 if TYPE_CHECKING:
-    from main import VinnyBot, extract_facts_from_message
-from main import extract_facts_from_message
+    from main import VinnyBot
 
 #short term summary
 async def get_short_term_summary(bot_instance, message_history: list):
@@ -32,11 +34,12 @@ async def get_short_term_summary(bot_instance, message_history: list):
         "## ONE-SENTENCE SUMMARY:"
     )
     try:
-        response = await bot_instance.gemini_client.aio.models.generate_content(
+        response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[summary_prompt]
         )
-        return response.text.strip()
+        if response:
+            return response.text.strip()
     except Exception:
         logging.error("Failed to generate short-term summary.", exc_info=True)
     return ""
@@ -60,7 +63,7 @@ async def get_message_sentiment(bot_instance, message_content: str):
         f"\"{message_content}\""
     )
     try:
-        response = await bot_instance.gemini_client.aio.models.generate_content(
+        response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[sentiment_prompt]
         )
@@ -79,8 +82,8 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
     Asks the Gemini model to classify the user's intent via a text prompt.
     """
     intent_prompt = (
-        "You are an intent routing system. Analyze the user's message and determine which of the following functions should be called. "
-        "Your output MUST be a single, valid JSON object with two keys: 'intent' and 'args'.\n\n"
+        "You are an intent routing system. Analyze the user's message and determine which function to call. "
+        "Your output MUST be a single, valid JSON object and NOTHING ELSE. Do not add any text before or after the JSON object.\n\n"
         "## Available Functions:\n"
         "1. `generate_image`: For requests to paint, draw, or create a picture. Requires a 'prompt' argument (string).\n"
         "2. `get_weather`: For requests about the weather. Requires a 'location' argument (string).\n"
@@ -99,22 +102,57 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
         f"\"{message.content}\""
     )
     
+    json_string = "" # Define here to be accessible in the except block
     try:
-        response = await bot_instance.gemini_client.aio.models.generate_content(
-            model=bot_instance.MODEL_NAME,
-            contents=[intent_prompt]
+        # +++ THIS IS THE FIX +++
+        # 1. Create a generation config that enforces JSON output.
+        json_config = types.GenerateContentConfig(
+            response_mime_type="application/json"
         )
-        json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
-        if json_match:
-            json_string = json_match.group(1) or json_match.group(2)
-            intent_data = json.loads(json_string)
-            return intent_data.get("intent"), intent_data.get("args", {})
+
+        # 2. Pass this new config to the API call.
+        response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME,
+            contents=[intent_prompt],
+            config=json_config 
+        )
+        if not response: return "general_conversation", {}
+        intent_data = json.loads(response.text)
+        return intent_data.get("intent"), intent_data.get("args", {})
+
     except json.JSONDecodeError:
-        logging.error(f"Failed to parse JSON from intent router. Raw text: {response.text}", exc_info=True)
+        logging.error(f"Failed to parse JSON even with JSON mode enabled. Raw response: '{response.text}'", exc_info=True)
     except Exception:
         logging.error("Failed to get intent from prompt due to an API or other error.", exc_info=True)
 
     return "general_conversation", {}
+
+async def triage_question(bot_instance, question_text: str) -> str:
+    """Classifies a question to determine the best response strategy."""
+    triage_prompt = (
+        "You are a question-routing AI. Classify the user's question into one of three categories.\n"
+        "Your output MUST be a single, valid JSON object with one key, 'question_type', and one of the following three values:\n"
+        "1. 'real_time_search': For questions that require current, up-to-the-minute information (news, weather, sports) or specific, verifiable facts likely outside a general knowledge base.\n"
+        "2. 'general_knowledge': For questions whose answers are stable, well-known facts (e.g., history, science, geography).\n"
+        "3. 'personal_opinion': For subjective questions directed at the AI's persona, its feelings, or about other users in the chat.\n\n"
+        "## Examples:\n"
+        "- User Question: 'what were today's news headlines?' -> {\"question_type\": \"real_time_search\"}\n"
+        "- User Question: 'who was the first us president?' -> {\"question_type\": \"general_knowledge\"}\n"
+        "- User Question: 'vinny what do you think of me?' -> {\"question_type\": \"personal_opinion\"}\n\n"
+        f"## User Question to Analyze:\n"
+        f"\"{question_text}\""
+    )
+    try:
+        json_config = types.GenerateContentConfig(response_mime_type="application/json")
+        response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME, contents=[triage_prompt], config=json_config
+        )
+        if not response: return "personal_opinion"
+        data = json.loads(response.text)
+        return data.get("question_type", "personal_opinion")
+    except Exception:
+        logging.error("Failed to triage question, defaulting to personal_opinion.", exc_info=True)
+        return "personal_opinion"
 
 class VinnyLogic(commands.Cog):
     def __init__(self, bot: 'VinnyBot'):
@@ -161,14 +199,6 @@ class VinnyLogic(commands.Cog):
                 if (original_message.attachments and "image" in original_message.attachments[0].content_type) or \
                    (original_message.embeds and original_message.embeds[0].image):
                     return await self._handle_image_reply(message, original_message)
-            
-            # --- NEW: Handles simple pings to the preceding image ---
-            cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
-            if not cleaned_content and self.bot.user.mentioned_in(message): # It's just a ping
-                async for last_message in message.channel.history(limit=1, before=message):
-                    if last_message.attachments and "image" in last_message.attachments[0].content_type:
-                        # If the last message had an image, treat this as an image reply
-                        return await self._handle_image_reply(message, last_message)
             if message.reference:
                 ref_message = await message.channel.fetch_message(message.reference.message_id)
                 if ref_message.author == self.bot.user:
@@ -176,7 +206,15 @@ class VinnyLogic(commands.Cog):
                     async with message.channel.typing():
                         await self._handle_direct_reply(message)
                     return
-
+                
+            # --- NEW: Handles simple pings to the preceding image ---
+            cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+            if not cleaned_content and self.bot.user.mentioned_in(message): # It's just a ping
+                async for last_message in message.channel.history(limit=1, before=message):
+                    if last_message.attachments and "image" in last_message.attachments[0].content_type:
+                        # If the last message had an image, treat this as an image reply
+                        return await self._handle_image_reply(message, last_message)
+            
             # --- Autonomous and General Chat Logic ---
             should_respond, is_autonomous = False, False
             if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
@@ -347,15 +385,13 @@ class VinnyLogic(commands.Cog):
             prompt_text += f" The painting's theme and background should be inspired by these traits: {other_desc}."
         await self._handle_image_request(message, prompt_text)
 
-    # cogs/vinny_logic.py
-
     async def _handle_image_request(self, message: discord.Message, image_prompt: str):
         async with message.channel.typing():
             thinking_message = "aight, lemme get my brushes..."
             try:
                 thinking_prompt = (f"You are Vinny, an eccentric artist. A user just asked you to paint '{image_prompt}'. Generate a very short, in-character phrase (in lowercase with typos) that you would say as you're about to start painting. Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and rum', 'aight aight i hear ya...'")
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[thinking_prompt], config=self.text_gen_config)
-                if response.text: thinking_message = response.text.strip()
+                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[thinking_prompt], config=self.text_gen_config)
+                if response and response.text: thinking_message = response.text.strip()
             except Exception as e: logging.warning(f"Failed to generate dynamic thinking message: {e}")
             await message.channel.send(thinking_message)
 
@@ -375,17 +411,16 @@ class VinnyLogic(commands.Cog):
             )
             smarter_prompt = image_prompt
             try:
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[prompt_rewriter_instruction], config=self.text_gen_config)
-                # Updated logic to parse the JSON response
-                json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
-                if json_match:
-                    json_string = json_match.group(1) or json_match.group(2)
-                    data = json.loads(json_string)
-                    # Fallback to the original prompt if the key is missing
-                    smarter_prompt = data.get("enhanced_prompt", image_prompt)
-                    logging.info(f"Rewrote prompt. Core subject: '{data.get('core_subject')}'")
-                else:
-                    logging.warning(f"Could not find JSON in prompt rewriter response. Using original prompt.")
+                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[prompt_rewriter_instruction], config=self.text_gen_config)
+                if response:
+                    json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
+                    if json_match:
+                        json_string = json_match.group(1) or json_match.group(2)
+                        data = json.loads(json_string)
+                        smarter_prompt = data.get("enhanced_prompt", image_prompt)
+                        logging.info(f"Rewrote prompt. Core subject: '{data.get('core_subject')}'")
+                    else:
+                        logging.warning(f"Could not find JSON in prompt rewriter response. Using original prompt.")
             except Exception as e: 
                 logging.warning(f"Failed to rewrite image prompt, using original.", exc_info=True)
             # +++ END: REVISED PROMPT REWRITER LOGIC +++
@@ -400,8 +435,8 @@ class VinnyLogic(commands.Cog):
                     f"Core Subject to Preserve: \"{image_prompt}\"\n\n"
                     "Return only the revised, safe-to-use prompt."
                 )
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[safety_check_prompt], config=self.text_gen_config)
-                if response.text:
+                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[safety_check_prompt], config=self.text_gen_config)
+                if response and response.text:
                     final_prompt = response.text.strip()
                     logging.info(f"Original prompt: '{smarter_prompt}' | Sanitized prompt: '{final_prompt}'")
             except Exception as e: logging.error("Failed to sanitize the image prompt.", exc_info=True)
@@ -417,22 +452,19 @@ class VinnyLogic(commands.Cog):
                         types.Part(text=comment_prompt_text),
                         types.Part(inline_data=types.Blob(mime_type="image/png", data=image_bytes))
                     ]
-                    response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[types.Content(parts=prompt_parts)])
-                    if response.text: response_text = response.text.strip()
+                    response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[types.Content(parts=prompt_parts)])
+                    if response and response.text: response_text = response.text.strip()
                 except Exception: logging.error("Failed to generate creative image comment.", exc_info=True)
                 image_file.seek(0)
                 await message.channel.send(response_text, file=discord.File(image_file, filename="vinny_masterpiece.png"))
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
-    # cogs/vinny_logic.py
-
     async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
         try:
             image_url = None
             mime_type = 'image/png'  # Default mime_type
 
-            # Find the image URL from either embeds or attachments
             if original_message.embeds and original_message.embeds[0].image:
                 image_url = original_message.embeds[0].image.url
             elif original_message.attachments and "image" in original_message.attachments[0].content_type:
@@ -444,7 +476,6 @@ class VinnyLogic(commands.Cog):
                 await reply_message.channel.send("i see the reply but somethin's wrong with the original picture, pal.")
                 return
 
-            # Download the image bytes from the URL
             async with self.bot.http_session.get(image_url) as resp:
                 if resp.status != 200:
                     await reply_message.channel.send("couldn't grab the picture, the link's all busted.")
@@ -464,11 +495,11 @@ class VinnyLogic(commands.Cog):
             ]
 
             async with reply_message.channel.typing():
-                response = await self.bot.gemini_client.aio.models.generate_content(
+                response = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(parts=prompt_parts)]
                 )
-                if response.text:
+                if response and response.text:
                     for chunk in self.bot.split_message(response.text): 
                         await reply_message.channel.send(chunk.lower())
 
@@ -479,19 +510,15 @@ class VinnyLogic(commands.Cog):
     async def _handle_direct_reply(self, message: discord.Message):
         """Handles a direct reply (via reply or mention) to one of the bot's messages with a focused context."""
         
-        # Find the message that the user is likely replying to.
         replied_to_message = None
         if message.reference and message.reference.message_id:
-            # Case 1: It's a native Discord reply.
             replied_to_message = await message.channel.fetch_message(message.reference.message_id)
         else:
-            # Case 2: It's a mention reply. Find the last message Vinny sent.
             async for prior_message in message.channel.history(limit=10):
                 if prior_message.author == self.bot.user:
                     replied_to_message = prior_message
                     break
         
-        # If we couldn't find a message to reply to, fall back to the general handler.
         if not replied_to_message:
             await self._handle_text_or_image_response(message, is_autonomous=False)
             return
@@ -508,12 +535,12 @@ class VinnyLogic(commands.Cog):
         )
 
         try:
-            response = await self.bot.gemini_client.aio.models.generate_content(
+            response = await self.bot.make_tracked_api_call(
                 model=self.bot.MODEL_NAME,
                 contents=[reply_prompt],
                 config=self.text_gen_config
             )
-            if response.text:
+            if response and response.text:
                 cleaned_response = response.text.strip()
                 if cleaned_response and cleaned_response.lower() != '[silence]':
                     for chunk in self.bot.split_message(cleaned_response):
@@ -523,10 +550,10 @@ class VinnyLogic(commands.Cog):
             await message.channel.send("my brain just shorted out for a second, what were we talkin about?")
 
     async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False, summary: str = ""):
-        if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
+        # This check now happens inside make_tracked_api_call
+        # if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
             user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
-            
             user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id) or {}
             profile_facts_string = ", ".join([f"{k.replace('_', ' ')} is {v}" for k, v in user_profile.items()]) or "nothing specific."
             user_name_to_use = await self.bot.firestore_service.get_user_nickname(user_id) or message.author.display_name
@@ -535,85 +562,78 @@ class VinnyLogic(commands.Cog):
                 types.Content(role='user', parts=[types.Part(text=self.bot.personality_instruction)]),
                 types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
             ]
-            async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH):
-                if msg.id == message.id: continue
-                # We simplify history to be text-only to avoid complexity
-                history.append(types.Content(
-                    role="model" if msg.author == self.bot.user else "user",
-                    parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]
-                ))
+            async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH, before=message):
+                history.append(types.Content(role="model" if msg.author == self.bot.user else "user", parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]))
             history.reverse()
 
-            # --- CORRECTED MULTIMODAL LOGIC ---
-            # 1. Start building the parts for the final prompt
-            prompt_parts = []
-            
-            # --- ADD THIS LINE TO CLEAN THE MESSAGE CONTENT ---
             cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
-            
-            # 2. Add the user's CLEANED text content first
-            prompt_parts.append(types.Part(text=cleaned_content))
 
-            # 3. If there's an image, add it as a separate part
+            final_instruction_text = ""
+            config = self.text_gen_config
+            
+            if "?" in message.content:
+                question_type = await triage_question(self.bot, cleaned_content)
+                logging.info(f"Question from '{message.author.display_name}' triaged as: {question_type}")
+
+                if question_type == "real_time_search":
+                    # The limit check for search grounding now happens in the central method
+                    config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
+                    final_instruction_text = (
+                        "CRITICAL TASK: The user has asked a factual question requiring a search. You MUST use the provided Google Search tool to find a real-world, accurate answer. "
+                        "FIRST, provide the direct, factual answer. AFTER providing the fact, you can add a short, in-character comment."
+                    )
+                elif question_type == "general_knowledge":
+                    final_instruction_text = (
+                        "CRITICAL TASK: The user has asked a factual question. Answer it accurately based on your internal knowledge. "
+                        "FIRST, provide the direct, factual answer. AFTER providing the fact, you can add a short, in-character comment."
+                    )
+                else: 
+                    final_instruction_text = (
+                        f"The user has asked a personal or subjective question. Respond in your creative, chaotic 'Vinny' persona. Your mood is {self.bot.current_mood}."
+                    )
+            else:
+                final_instruction_text = (
+                    f"Respond to the user in your 'Vinny' persona based on the conversation history. Your mood is {self.bot.current_mood}."
+                )
+
+            if is_autonomous and summary:
+                final_instruction_text = (f"Your mood is {self.bot.current_mood}. You are autonomously chiming in. The current topic is: '{summary}'. Make a chaotic, funny, or flirty comment.")
+
+            history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text)]))
+            
+            final_user_message_text = f"{message.author.display_name}: {cleaned_content}"
+            prompt_parts = [types.Part(text=final_user_message_text)]
+            
             if message.attachments:
                 for attachment in message.attachments:
                     if "image" in attachment.content_type:
                         image_bytes = await attachment.read()
                         prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
-                        break # Only process the first image
-
-            # 4. Construct the final instruction prompt text
-            final_instruction_text = (
-                f"Your mood is {self.bot.current_mood}. Replying to {user_name_to_use}.\n"
-                f"# --- KNOWN FACTS ABOUT {user_name_to_use.upper()} ---\n{profile_facts_string}\n"
-                f"Based on all this context, respond to their last message (which may include an image)."
-            )
-            if is_autonomous and summary:
-                final_instruction_text = (
-                    f"Your mood is {self.bot.current_mood}. You are autonomously chiming in on a conversation.\n"
-                    f"The current topic is: '{summary}'.\n"
-                    f"Make a chaotic, funny, or flirty comment about this topic."
-                )
-
-            # 5. Prepend the main instructions to the parts list
-            prompt_parts.insert(0, types.Part(text=final_instruction_text))
-            
-            # 6. Add the final prompt to the history
+                        break
             history.append(types.Content(role='user', parts=prompt_parts))
-            
-            # --- API Call Logic ---
-            config = self.text_gen_config
-            if "?" in message.content and self.bot.API_CALL_COUNTS["search_grounding"] < self.bot.SEARCH_GROUNDING_LIMIT:
-                config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
-                self.bot.API_CALL_COUNTS["search_grounding"] += 1
-            
-            self.bot.API_CALL_COUNTS["text_generation"] += 1
-            await self.bot.update_api_count_in_firestore()
 
-            response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=history, config=config)
+            # The old counting lines are removed, we just call the new central method
+            response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=history, config=config)
 
-            if response.text:
+            if response and response.text:
                 cleaned_response = response.text.strip()
                 if cleaned_response and cleaned_response.lower() != '[silence]':
                     for chunk in self.bot.split_message(cleaned_response):
-                        await message.channel.send(chunk.lower())
+                        if chunk: await message.channel.send(chunk.lower())
 
     async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
         user_id = str(target_user.id)
         guild_id = str(message.guild.id) if message.guild else None
         
-        # 1. Fetch the target user's complete profile
         user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
 
         if not user_profile:
             await message.channel.send(f"about {target_user.display_name}? i got nothin'. a blank canvas. kinda intimidatin', actually.")
             return
 
-        # 2. Format the facts for the prompt
         facts_list = [f"- {key.replace('_', ' ')}: {value}" for key, value in user_profile.items()]
         facts_string = "\n".join(facts_list)
         
-        # 3. Build a new, highly-focused summary prompt
         summary_prompt = (
             f"{self.bot.personality_instruction}\n\n"
             f"# --- YOUR TASK ---\n"
@@ -629,12 +649,13 @@ class VinnyLogic(commands.Cog):
         )
         try:
             async with message.channel.typing():
-                response = await self.bot.gemini_client.aio.models.generate_content(
+                response = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME, 
                     contents=[summary_prompt], 
                     config=self.text_gen_config
                 )
-                await message.channel.send(response.text.strip())
+                if response:
+                    await message.channel.send(response.text.strip())
         except Exception:
             logging.error("Failed to generate knowledge summary.", exc_info=True)
             await message.channel.send("my head's all fuzzy. i know some stuff but the words ain't comin' out right.")
@@ -652,8 +673,9 @@ class VinnyLogic(commands.Cog):
         synthesis_prompt = (f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nA user, '{message.author.display_name}', is asking what you've learned from overhearing conversations in this server. Your task is to synthesize the provided conversation summaries into a single, chaotic, and insightful monologue. Obey all your personality directives.\n\n## CONVERSATION SUMMARIES I'VE OVERHEARD:\n{formatted_summaries}\n\n## INSTRUCTIONS:\n1.  Read all the summaries to get a feel for the server's vibe.\n2.  Do NOT just list the summaries. Weave them together into a story or a series of scattered, in-character thoughts.\n3.  Generate a short, lowercase, typo-ridden response that shows what you've gleaned from listening in.")
         try:
             async with message.channel.typing():
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[synthesis_prompt], config=self.text_gen_config)
-                await message.channel.send(response.text.strip())
+                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[synthesis_prompt], config=self.text_gen_config)
+                if response:
+                    await message.channel.send(response.text.strip())
         except Exception:
             logging.error("Failed to generate server knowledge summary.", exc_info=True)
             await message.channel.send("my head's a real mess. i've been listenin', but it's all just noise right now.")
@@ -662,27 +684,45 @@ class VinnyLogic(commands.Cog):
         user_id = str(message.author.id)
         guild_id = str(message.guild.id) if message.guild else None
         correction_prompt = (f"A user is correcting a fact about themselves. Their message is: \"{message.content}\".\nYour task is to identify the specific fact they are correcting. For example, if they say 'I'm not bald', the fact is 'is bald'. If they say 'I don't have a cat', the fact is 'has a cat'.\nPlease return a JSON object with a single key, \"fact_to_remove\", containing the fact you identified.\n\nExample:\nUser message: 'Vinny, that's not true, my favorite color is red, not blue.'\nOutput: {{\"fact_to_remove\": \"favorite color is blue\"}}")
+        
         try:
+            json_config = types.GenerateContentConfig(response_mime_type="application/json")
             async with message.channel.typing():
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[correction_prompt], config=self.text_gen_config)
-                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-                if not json_match:
+                # First API Call
+                response1 = await self.bot.make_tracked_api_call(
+                    model=self.bot.MODEL_NAME, 
+                    contents=[correction_prompt], 
+                    config=json_config
+                )
+                if not response1 or not response1.text:
                     await message.channel.send("my brain's all fuzzy, i didn't get what i was wrong about."); return
-                fact_data = json.loads(json_match.group(0))
+                
+                fact_data = json.loads(response1.text)
                 fact_to_remove = fact_data.get("fact_to_remove")
                 if not fact_to_remove:
                     await message.channel.send("huh? what was i wrong about? try bein more specific, pal."); return
+                
                 user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
                 if not user_profile:
                     await message.channel.send("i don't even know anything about you to be wrong about!"); return
+                
                 key_mapping_prompt = (f"A user's profile is stored as a JSON object. I need to find the key that corresponds to the fact: \"{fact_to_remove}\".\nHere is the user's current profile data: {json.dumps(user_profile, indent=2)}\nBased on the data, which key is the most likely match for the fact I need to remove? Return a JSON object with a single key, \"database_key\".\n\nExample:\nFact: 'is a painter'\nProfile: {{\"occupation\": \"a painter\"}}\nOutput: {{\"database_key\": \"occupation\"}}")
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[key_mapping_prompt], config=self.text_gen_config)
-                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-                if not json_match: return
-                key_data = json.loads(json_match.group(0))
+                
+                # Second API Call
+                response2 = await self.bot.make_tracked_api_call(
+                    model=self.bot.MODEL_NAME, 
+                    contents=[key_mapping_prompt], 
+                    config=json_config
+                )
+                if not response2 or not response2.text:
+                    await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird."); return
+                
+                key_data = json.loads(response2.text)
                 db_key = key_data.get("database_key")
+                
                 if not db_key or db_key not in user_profile:
                     await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird."); return
+                
                 if await self.bot.firestore_service.delete_user_profile_fact(user_id, guild_id, db_key):
                     await message.channel.send(f"aight, my mistake. i'll forget that whole '{db_key.replace('_', ' ')}' thing. salute.")
                 else:

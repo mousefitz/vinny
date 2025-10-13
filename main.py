@@ -53,50 +53,6 @@ def setup_logging():
 # 3. Run the setup function
 setup_logging()
 
-# --- Standalone Fact Extraction Function ---
-async def extract_facts_from_message(bot_instance, message_or_str: discord.Message | str, author_name: str = None):
-    """
-    Analyzes a user message OR a string to extract personal facts.
-    If message_or_str is a string, author_name must be provided.
-    """
-    if isinstance(message_or_str, discord.Message):
-        user_name = message_or_str.author.display_name
-        user_message = message_or_str.content
-    else: # It's a string
-        user_name = author_name
-        user_message = str(message_or_str)
-
-    # The rest of the function logic remains the same
-    fact_extraction_prompt = (
-        f"You are a highly accurate fact-extraction system. The user '{user_name}' wrote the following message. "
-        "Your task is to analyze the message and identify any personal facts about the subject of the sentence. "
-        "Your output must be a valid JSON object.\n\n"
-        "## Rules:\n"
-        "1.  **Identify the Subject:** The subject of the fact could be the author ('I', 'my') or another person mentioned in the text. The author's name is '{user_name}'.\n"
-        "2.  **Determine the Key:** The key for the JSON object should be a descriptive noun or attribute (e.g., 'pet', 'favorite color', 'hometown').\n"
-        "3.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective.\n"
-        "4.  **Return JSON:** If no facts are found, return an empty JSON object: {}.\n\n"
-        "## Examples:\n"
-        "-   Author: 'Mouse', Message: 'I have a cat named chumba' -> {\"pet\": \"a cat named chumba\"}\n"
-        "-   Author: 'Mouse', Message: 'enraged is my boyfriend' -> {\"relationship\": \"is their boyfriend\"}\n\n"
-        f"## User Message to Analyze:\n"
-        f"Author: '{user_name}', Message: \"{user_message}\""
-    )
-    try:
-        response = await bot_instance.gemini_client.aio.models.generate_content(
-            model=bot_instance.MODEL_NAME,
-            contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])],
-            config=bot_instance.GEMINI_TEXT_CONFIG
-        )
-        raw_text = response.text.strip()
-        json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', raw_text, re.DOTALL)
-        if json_match:
-            json_string = json_match.group(1) or json_match.group(2)
-            return json.loads(json_string)
-    except Exception:
-        logging.error(f"Fact extraction from message failed.", exc_info=True)
-    return None
-
 class VinnyBot(commands.Bot):
 
     def __init__(self, *args, **kwargs):
@@ -171,6 +127,33 @@ class VinnyBot(commands.Bot):
             "search_grounding": 0,
         }
 
+    async def make_tracked_api_call(self, **kwargs):
+        """A centralized method to make Gemini API calls and track them."""
+        # Check if the text generation limit has been reached.
+        if self.API_CALL_COUNTS["text_generation"] >= self.TEXT_GENERATION_LIMIT:
+            logging.warning("Text generation limit reached. Aborting API call.")
+            return None # Or raise an exception
+
+        # Check for search grounding and count it if used.
+        config = kwargs.get('config')
+        if config and config.tools and any(isinstance(t.google_search, types.GoogleSearch) for t in config.tools):
+            if self.API_CALL_COUNTS["search_grounding"] < self.SEARCH_GROUNDING_LIMIT:
+                self.API_CALL_COUNTS["search_grounding"] += 1
+            else:
+                logging.warning("Search grounding limit reached. Search will not be used.")
+                # We can remove the tool to prevent an error
+                kwargs['config'] = types.GenerateContentConfig(safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings)
+
+        try:
+            response = await self.gemini_client.aio.models.generate_content(**kwargs)
+            # Increment the main counter AFTER a successful call
+            self.API_CALL_COUNTS["text_generation"] += 1
+            await self.update_api_count_in_firestore()
+            return response
+        except Exception:
+            logging.error("An error occurred in the centralized API call handler.", exc_info=True)
+            return None
+        
     async def setup_hook(self):
         """This is called once when the bot logs in."""
         logging.info("Running setup_hook...")
