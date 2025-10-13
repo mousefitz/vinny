@@ -1029,6 +1029,8 @@ class VinnyLogic(commands.Cog):
             embed.timestamp = datetime.datetime.now(ZoneInfo("America/New_York"))
             await ctx.send(embed=embed)
 
+# cogs/vinny_logic.py
+
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
         target_user = ctx.author
