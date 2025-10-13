@@ -1034,10 +1034,13 @@ class VinnyLogic(commands.Cog):
         target_user = ctx.author
         
         if ctx.message.mentions:
-            
             target_user = ctx.message.mentions[0]
-        
-        extracted_facts = await extract_facts_from_message(self.bot, knowledge_string)
+            # Clean the mention from the knowledge string so it's not part of the fact
+            knowledge_string = re.sub(r'<@!?\d+>', '', knowledge_string).strip()
+
+        # +++ THIS IS THE MODIFIED LINE +++
+        # We now pass the target user's name along with the string
+        extracted_facts = await extract_facts_from_message(self.bot, knowledge_string, author_name=target_user.display_name)
         
         if not extracted_facts:
             logging.warning(f"Fact extraction failed for string: '{knowledge_string}'")

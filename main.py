@@ -54,14 +54,19 @@ def setup_logging():
 setup_logging()
 
 # --- Standalone Fact Extraction Function ---
-async def extract_facts_from_message(bot_instance, message: discord.Message):
+async def extract_facts_from_message(bot_instance, message_or_str: discord.Message | str, author_name: str = None):
     """
-    Analyzes a user message to extract personal facts using the bot's Gemini client.
+    Analyzes a user message OR a string to extract personal facts.
+    If message_or_str is a string, author_name must be provided.
     """
-    # Now that we have the full message object, we can get the author and content
-    user_name = message.author.display_name
-    user_message = message.content
+    if isinstance(message_or_str, discord.Message):
+        user_name = message_or_str.author.display_name
+        user_message = message_or_str.content
+    else: # It's a string
+        user_name = author_name
+        user_message = str(message_or_str)
 
+    # The rest of the function logic remains the same
     fact_extraction_prompt = (
         f"You are a highly accurate fact-extraction system. The user '{user_name}' wrote the following message. "
         "Your task is to analyze the message and identify any personal facts about the subject of the sentence. "
