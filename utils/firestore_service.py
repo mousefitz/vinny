@@ -4,12 +4,9 @@ import json
 import datetime
 from zoneinfo import ZoneInfo
 from typing import Coroutine, List, Dict, Any
-
 import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_client import BaseClient
-
-# Import path generators from constants
 from . import constants
 
 class FirestoreService:
@@ -18,12 +15,11 @@ class FirestoreService:
         self.loop = loop
         self.APP_ID = app_id
 
-    # --- Firebase Initialization ---
     def _initialize_firebase(self, firebase_b64_creds: str) -> BaseClient | None:
         if not firebase_b64_creds:
             logging.warning("GOOGLE_APPLICATION_CREDENTIALS_BASE64 not set. Firebase is disabled.")
             return None
-        # Check if the app is already initialized
+        
         if firebase_admin._apps:
             return firestore.client()
         try:
@@ -37,6 +33,7 @@ class FirestoreService:
             return None
 
     # --- Generic Firestore Operations ---
+
     async def add_doc(self, collection_path: str, data: dict):
         if not self.db: return None
         try:
@@ -70,6 +67,7 @@ class FirestoreService:
             return False
 
     # --- User Profile Management ---
+
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: return False
         key = key.lower().replace(' ', '_')
@@ -87,14 +85,14 @@ class FirestoreService:
     async def get_user_profile(self, user_id: str, guild_id: str | None) -> dict:
         if not self.db: return {}
         global_profile, server_profile = {}, {}
-        # Get global profile
+        
         try:
             global_path = constants.get_user_profile_collection_path(self.APP_ID, None)
             doc = await self.loop.run_in_executor(None, self.db.collection(global_path).document(user_id).get)
             if doc.exists: global_profile = doc.to_dict()
         except Exception:
             logging.warning(f"Could not retrieve global profile for user '{user_id}'", exc_info=True)
-        # Get server-specific profile if applicable
+        
         if guild_id:
             try:
                 server_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
@@ -102,7 +100,7 @@ class FirestoreService:
                 if doc.exists: server_profile = doc.to_dict()
             except Exception:
                 logging.warning(f"Could not retrieve server profile for user '{user_id}' in guild '{guild_id}'", exc_info=True)
-        # Server profile overrides global profile keys
+        
         return global_profile | server_profile
 
     async def delete_user_profile(self, user_id: str, guild_id: str):
@@ -127,6 +125,7 @@ class FirestoreService:
             return False
 
     # --- Relationship Score Management ---
+
     async def update_relationship_score(self, user_id: str, guild_id: str, sentiment_score: int):
         """Updates a user's relationship score and returns the new total."""
         if not self.db: return 0
@@ -153,6 +152,7 @@ class FirestoreService:
             return 0
         
     # --- Nickname Management ---
+
     async def save_user_nickname(self, user_id: str, nickname: str):
         if not self.db: return False
         try:
@@ -175,6 +175,7 @@ class FirestoreService:
             return None
 
     # --- Memory Summaries ---
+
     async def save_memory(self, guild_id: str, summary_data: dict):
         if not self.db: return
         path = constants.get_summaries_collection_path(self.APP_ID, guild_id)
@@ -232,6 +233,7 @@ class FirestoreService:
         return sorted(relevant, key=lambda x: x.get('timestamp', ''), reverse=True)[:limit]
 
     # --- Marriage & Proposals ---
+
     async def save_proposal(self, proposer_id: str, recipient_id: str):
         if not self.db: return False
         try:
@@ -292,6 +294,7 @@ class FirestoreService:
             return False
             
     # --- Rate Limiter Documents ---
+    
     async def get_rate_limit_doc(self):
         if not self.db: return None
         path = constants.get_bot_state_collection_path(self.APP_ID)

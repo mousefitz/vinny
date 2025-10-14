@@ -129,24 +129,23 @@ class VinnyBot(commands.Bot):
 
     async def make_tracked_api_call(self, **kwargs):
         """A centralized method to make Gemini API calls and track them."""
-        # Check if the text generation limit has been reached.
+        
         if self.API_CALL_COUNTS["text_generation"] >= self.TEXT_GENERATION_LIMIT:
             logging.warning("Text generation limit reached. Aborting API call.")
-            return None # Or raise an exception
-
-        # Check for search grounding and count it if used.
+            return None 
+    
         config = kwargs.get('config')
         if config and config.tools and any(isinstance(t.google_search, types.GoogleSearch) for t in config.tools):
             if self.API_CALL_COUNTS["search_grounding"] < self.SEARCH_GROUNDING_LIMIT:
                 self.API_CALL_COUNTS["search_grounding"] += 1
             else:
                 logging.warning("Search grounding limit reached. Search will not be used.")
-                # We can remove the tool to prevent an error
+                
                 kwargs['config'] = types.GenerateContentConfig(safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings)
 
         try:
             response = await self.gemini_client.aio.models.generate_content(**kwargs)
-            # Increment the main counter AFTER a successful call
+            
             self.API_CALL_COUNTS["text_generation"] += 1
             await self.update_api_count_in_firestore()
             return response
@@ -159,7 +158,7 @@ class VinnyBot(commands.Bot):
         logging.info("Running setup_hook...")
         self.http_session = aiohttp.ClientSession()
         
-        # Correctly initialize the genai.Client
+        
         self.gemini_client = genai.Client(api_key=self.GEMINI_API_KEY)
         
         self.firestore_service = FirestoreService(
@@ -196,6 +195,7 @@ class VinnyBot(commands.Bot):
             await self.http_session.close()
             
     # --- Helper & Utility Functions ---
+
     def split_message(self, content, char_limit=1900):
         if len(content) <= char_limit: return [content]
         chunks = []
@@ -213,6 +213,7 @@ class VinnyBot(commands.Bot):
         return chunks
 
     # --- Rate Limiting Logic ---
+    
     async def initialize_rate_limiter(self):
         if not self.firestore_service or not self.firestore_service.db: return
         

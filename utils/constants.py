@@ -1,13 +1,16 @@
 from google.genai import types
 
 # --- API Limits ---
+
 TEXT_GENERATION_LIMIT = 1490
 SEARCH_GROUNDING_LIMIT = 490
 
 # --- Bot Persona ---
+
 MOODS = ["cranky", "depressed", "horny", "belligerent", "artistic", "cheerful", "drunkenly profound", "suspicious", "flirty", "nostalgic", "mischievous"]
 
 # --- Gemini Configuration ---
+
 GEMINI_SAFETY_SETTINGS_TEXT_ONLY = [
     types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
     for cat in [
@@ -19,7 +22,7 @@ GEMINI_SAFETY_SETTINGS_TEXT_ONLY = [
 ]
 
 # --- Firestore Path Generators ---
-# Using functions makes paths consistent and prevents typos
+
 def get_user_profile_collection_path(app_id: str, guild_id: str | None) -> str:
     """Returns the path for server-specific or global user profiles."""
     if guild_id:
@@ -47,6 +50,7 @@ def get_user_details_path(app_id: str, user_id: str) -> str:
     return f"artifacts/{app_id}/users/{user_id}/user_profile"
 
 # --- Horoscope Emojis ---
+
 SIGN_EMOJIS = {
     "aries": "♈", "taurus": "♉", "gemini": "♊", "cancer": "♋", 
     "leo": "♌", "virgo": "♍", "libra": "♎", "scorpio": "♏", 
@@ -54,6 +58,7 @@ SIGN_EMOJIS = {
 }
 
 # --- Weather Emojis ---
+
 def get_weather_emoji(weather_main: str):
     weather_main = weather_main.lower()
     if "clear" in weather_main: return "☀️"

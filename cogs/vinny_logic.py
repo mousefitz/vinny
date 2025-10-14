@@ -8,21 +8,16 @@ import json
 import logging
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING, Coroutine
-
-# Corrected Google AI Imports
 from google import genai
 from google.genai import types
-
-# Import from our new utility modules
 from utils import constants, api_clients
-
-# Import from our new utility module
 from utils.fact_extractor import extract_facts_from_message
 
 if TYPE_CHECKING:
     from main import VinnyBot
 
-#short term summary
+# --- SHORT TERM MEMORY ---
+
 async def get_short_term_summary(bot_instance, message_history: list):
     """Summarizes the last few messages to find the current topic."""
     conversation_text = "\n".join(message_history)
@@ -44,7 +39,7 @@ async def get_short_term_summary(bot_instance, message_history: list):
         logging.error("Failed to generate short-term summary.", exc_info=True)
     return ""
 
-# New message sentiment function
+# --- MESSAGE SENTIMENT ---
 
 async def get_message_sentiment(bot_instance, message_content: str):
     """
@@ -76,7 +71,8 @@ async def get_message_sentiment(bot_instance, message_content: str):
         logging.error("Failed to get message sentiment.", exc_info=True)
     return "neutral"
 
-# --- NEW PROMPT-BASED INTENT ROUTER (Compatible with all models) ---
+# --- PROMPT-BASED INTENT ROUTER  ---
+
 async def get_intent_from_prompt(bot_instance, message: discord.Message):
     """
     Asks the Gemini model to classify the user's intent via a text prompt.
@@ -102,15 +98,13 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
         f"\"{message.content}\""
     )
     
-    json_string = "" # Define here to be accessible in the except block
+    json_string = "" 
     try:
-        # +++ THIS IS THE FIX +++
-        # 1. Create a generation config that enforces JSON output.
+        
         json_config = types.GenerateContentConfig(
             response_mime_type="application/json"
         )
 
-        # 2. Pass this new config to the API call.
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[intent_prompt],
@@ -126,6 +120,8 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
         logging.error("Failed to get intent from prompt due to an API or other error.", exc_info=True)
 
     return "general_conversation", {}
+
+# --- QUESTION TRIAGE ---
 
 async def triage_question(bot_instance, question_text: str) -> str:
     """Classifies a question to determine the best response strategy."""
@@ -189,13 +185,13 @@ class VinnyLogic(commands.Cog):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
-            # --- High-priority pre-checks ---
+           
             if await self._is_a_correction(message):
                 return await self._handle_correction(message)
-            # This handles native replies to images
+            
             if message.reference and self.bot.user.mentioned_in(message):
                 original_message = await message.channel.fetch_message(message.reference.message_id)
-                # --- THIS IS THE UPDATED CHECK ---
+  
                 if (original_message.attachments and "image" in original_message.attachments[0].content_type) or \
                    (original_message.embeds and original_message.embeds[0].image):
                     return await self._handle_image_reply(message, original_message)
@@ -207,12 +203,11 @@ class VinnyLogic(commands.Cog):
                         await self._handle_direct_reply(message)
                     return
                 
-            # --- NEW: Handles simple pings to the preceding image ---
+            # --- Handles simple pings to the preceding image ---
             cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
-            if not cleaned_content and self.bot.user.mentioned_in(message): # It's just a ping
+            if not cleaned_content and self.bot.user.mentioned_in(message): 
                 async for last_message in message.channel.history(limit=1, before=message):
                     if last_message.attachments and "image" in last_message.attachments[0].content_type:
-                        # If the last message had an image, treat this as an image reply
                         return await self._handle_image_reply(message, last_message)
             
             # --- Autonomous and General Chat Logic ---
@@ -255,7 +250,7 @@ class VinnyLogic(commands.Cog):
                          user_name_to_use = await self.bot.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
-                    else: # Fallback to general_conversation
+                    else: 
                         user_sentiment = await get_message_sentiment(self.bot, message.content)
                         sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
                         score_change = sentiment_score_map.get(user_sentiment, 0)
@@ -283,7 +278,7 @@ class VinnyLogic(commands.Cog):
                         for key, value in extracted_facts.items():
                             await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
             else:
-                # --- Passive Reaction Logic ---
+
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
                 if "pie" in message.content.lower() and random.random() < 0.75: await message.add_reaction('🥧')
                 elif any(keyword in message.content.lower() for keyword in explicit_reaction_keywords) or (random.random() < self.bot.reaction_chance):
@@ -296,6 +291,8 @@ class VinnyLogic(commands.Cog):
 
         except Exception:
             logging.critical("CRITICAL ERROR in on_message", exc_info=True)
+
+# --- CONVERSATIONAL CORRECTIONS ---
 
     async def _is_a_correction(self, message: discord.Message) -> bool:
         correction_keywords = ["that's not true", "that isn't true", "you're wrong", "i am not", "i'm not", "i don't have"]
@@ -317,11 +314,12 @@ class VinnyLogic(commands.Cog):
             logging.error("Failed to perform contradiction check.", exc_info=True)
         return False
 
+# --- SENTIMENT BASED MOODS ---
+
     async def update_mood_based_on_sentiment(self, sentiment: str):
         """
         Influences Vinny's mood based on conversational sentiment.
         """
-        # Define how sentiments map to moods.
         mood_map = {
             "positive": ["cheerful", "flirty"],
             "negative": ["cranky", "depressed", "belligerent"],
@@ -330,13 +328,14 @@ class VinnyLogic(commands.Cog):
             "angry": ["belligerent", "cranky"],
         }
 
-        # If the sentiment has a corresponding mood, there's a chance it will influence him.
-        if sentiment in mood_map and random.random() < 0.25: # 25% chance to be influenced
+        if sentiment in mood_map and random.random() < 0.25: 
             new_mood = random.choice(mood_map[sentiment])
             if self.bot.current_mood != new_mood:
                 self.bot.current_mood = new_mood
                 self.bot.last_mood_change_time = datetime.datetime.now()
                 logging.info(f"Vinny's mood was influenced by conversation. New mood: {self.bot.current_mood}")
+
+# --- USER RELATIONSHIP ---
     
     async def _update_relationship_status(self, user_id: str, guild_id: str | None, new_score: float):
         """Determines a user's relationship status based on their score."""
@@ -355,12 +354,16 @@ class VinnyLogic(commands.Cog):
             await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "relationship_status", new_status)
             logging.info(f"Relationship status for user {user_id} changed from '{current_status}' to '{new_status}' (Score: {new_score:.2f})")
 
+# --- USER NICKNAMES ---
+
     async def _find_user_by_vinny_name(self, guild: discord.Guild, target_name: str):
         if not self.bot.firestore_service or not guild: return None
         for member in guild.members:
             nickname = await self.bot.firestore_service.get_user_nickname(str(member.id))
             if nickname and nickname.lower() == target_name.lower(): return member
         return None
+
+# --- USER PORTRAITS ---
 
     async def _handle_paint_me_request(self, message: discord.Message):
         user_id = str(message.author.id)
@@ -385,6 +388,8 @@ class VinnyLogic(commands.Cog):
             prompt_text += f" The painting's theme and background should be inspired by these traits: {other_desc}."
         await self._handle_image_request(message, prompt_text)
 
+# --- IMAGE REQUESTS ---
+
     async def _handle_image_request(self, message: discord.Message, image_prompt: str):
         async with message.channel.typing():
             thinking_message = "aight, lemme get my brushes..."
@@ -395,7 +400,6 @@ class VinnyLogic(commands.Cog):
             except Exception as e: logging.warning(f"Failed to generate dynamic thinking message: {e}")
             await message.channel.send(thinking_message)
 
-            # +++ START: REVISED PROMPT REWRITER LOGIC +++
             prompt_rewriter_instruction = (
                 "You are a prompt engineering assistant. Your task is to enhance a user's art request for an image AI. You must follow the rules strictly.\n\n"
                 "## Rules:\n"
@@ -423,7 +427,6 @@ class VinnyLogic(commands.Cog):
                         logging.warning(f"Could not find JSON in prompt rewriter response. Using original prompt.")
             except Exception as e: 
                 logging.warning(f"Failed to rewrite image prompt, using original.", exc_info=True)
-            # +++ END: REVISED PROMPT REWRITER LOGIC +++
 
             final_prompt = smarter_prompt
             try:
@@ -460,10 +463,12 @@ class VinnyLogic(commands.Cog):
             else:
                 await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
 
+# --- IMAGE REPLIES ---
+
     async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
         try:
             image_url = None
-            mime_type = 'image/png'  # Default mime_type
+            mime_type = 'image/png'  
 
             if original_message.embeds and original_message.embeds[0].image:
                 image_url = original_message.embeds[0].image.url
@@ -507,6 +512,8 @@ class VinnyLogic(commands.Cog):
             logging.error("Failed to handle an image reply.", exc_info=True)
             await reply_message.channel.send("my eyes are all blurry, couldn't make out the picture, pal.")
 
+# --- DIRECT REPLIES ---
+
     async def _handle_direct_reply(self, message: discord.Message):
         """Handles a direct reply (via reply or mention) to one of the bot's messages with a focused context."""
         
@@ -549,9 +556,9 @@ class VinnyLogic(commands.Cog):
             logging.error("Failed to handle direct reply.", exc_info=True)
             await message.channel.send("my brain just shorted out for a second, what were we talkin about?")
 
+# --- TEXT OR IMAGE BASED RESPONSES ---
+
     async def _handle_text_or_image_response(self, message: discord.Message, is_autonomous: bool = False, summary: str = ""):
-        # This check now happens inside make_tracked_api_call
-        # if self.bot.API_CALL_COUNTS["text_generation"] >= self.bot.TEXT_GENERATION_LIMIT: return
         async with self.bot.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
             user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
             user_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id) or {}
@@ -563,7 +570,9 @@ class VinnyLogic(commands.Cog):
                 types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
             ]
             async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH, before=message):
-                history.append(types.Content(role="model" if msg.author == self.bot.user else "user", parts=[types.Part(text=f"{msg.author.display_name}: {msg.content}")]))
+                user_line = f"{msg.author.display_name} (ID: {msg.author.id}): {msg.content}"
+                bot_line = f"{msg.author.display_name}: {msg.content}"
+                history.append(types.Content(role="model" if msg.author == self.bot.user else "user", parts=[types.Part(text=bot_line if msg.author == self.bot.user else user_line)]))
             history.reverse()
 
             cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
@@ -576,7 +585,6 @@ class VinnyLogic(commands.Cog):
                 logging.info(f"Question from '{message.author.display_name}' triaged as: {question_type}")
 
                 if question_type == "real_time_search":
-                    # The limit check for search grounding now happens in the central method
                     config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
                     final_instruction_text = (
                         "CRITICAL TASK: The user has asked a factual question requiring a search. You MUST use the provided Google Search tool to find a real-world, accurate answer. "
@@ -598,10 +606,26 @@ class VinnyLogic(commands.Cog):
 
             if is_autonomous and summary:
                 final_instruction_text = (f"Your mood is {self.bot.current_mood}. You are autonomously chiming in. The current topic is: '{summary}'. Make a chaotic, funny, or flirty comment.")
+# CONTEXT BLEED FIX
+            participants = set()
 
+            async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH, before=message):
+                if not msg.author.bot:
+                    participants.add(msg.author.display_name)
+            participants.add(message.author.display_name)
+            
+            participant_list = ", ".join(sorted(list(participants)))
+
+            attribution_instruction = (
+                f"\n\n# --- ATTENTION: ACCURATE SPEAKER ATTRIBUTION ---\n"
+                f"The users in this conversation are: [{participant_list}].\n"
+                f"CRITICAL RULE: You MUST correctly attribute all statements and questions to the person who actually said them. Pay close attention to the names. Do not confuse speakers."
+            )
+            final_instruction_text += attribution_instruction
+            
             history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text)]))
             
-            final_user_message_text = f"{message.author.display_name}: {cleaned_content}"
+            final_user_message_text = f"{message.author.display_name} (ID: {message.author.id}): {cleaned_content}"
             prompt_parts = [types.Part(text=final_user_message_text)]
             
             if message.attachments:
@@ -612,7 +636,6 @@ class VinnyLogic(commands.Cog):
                         break
             history.append(types.Content(role='user', parts=prompt_parts))
 
-            # The old counting lines are removed, we just call the new central method
             response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=history, config=config)
 
             if response and response.text:
@@ -620,6 +643,8 @@ class VinnyLogic(commands.Cog):
                 if cleaned_response and cleaned_response.lower() != '[silence]':
                     for chunk in self.bot.split_message(cleaned_response):
                         if chunk: await message.channel.send(chunk.lower())
+
+# --- USER KNOWLEDGE REQUESTS ---
 
     async def _handle_knowledge_request(self, message: discord.Message, target_user: discord.Member):
         user_id = str(target_user.id)
@@ -660,6 +685,8 @@ class VinnyLogic(commands.Cog):
             logging.error("Failed to generate knowledge summary.", exc_info=True)
             await message.channel.send("my head's all fuzzy. i know some stuff but the words ain't comin' out right.")
 
+# --- SERVER KNOWLEDGE REQUESTS ---
+
     async def _handle_server_knowledge_request(self, message: discord.Message):
         if not message.guild:
             await message.channel.send("what server? we're in a private chat, pal. my brain's fuzzy enough as it is.")
@@ -680,6 +707,8 @@ class VinnyLogic(commands.Cog):
             logging.error("Failed to generate server knowledge summary.", exc_info=True)
             await message.channel.send("my head's a real mess. i've been listenin', but it's all just noise right now.")
 
+# --- CORRECTION REQUESTS ---
+
     async def _handle_correction(self, message: discord.Message):
         user_id = str(message.author.id)
         guild_id = str(message.guild.id) if message.guild else None
@@ -688,7 +717,7 @@ class VinnyLogic(commands.Cog):
         try:
             json_config = types.GenerateContentConfig(response_mime_type="application/json")
             async with message.channel.typing():
-                # First API Call
+
                 response1 = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME, 
                     contents=[correction_prompt], 
@@ -708,7 +737,6 @@ class VinnyLogic(commands.Cog):
                 
                 key_mapping_prompt = (f"A user's profile is stored as a JSON object. I need to find the key that corresponds to the fact: \"{fact_to_remove}\".\nHere is the user's current profile data: {json.dumps(user_profile, indent=2)}\nBased on the data, which key is the most likely match for the fact I need to remove? Return a JSON object with a single key, \"database_key\".\n\nExample:\nFact: 'is a painter'\nProfile: {{\"occupation\": \"a painter\"}}\nOutput: {{\"database_key\": \"occupation\"}}")
                 
-                # Second API Call
                 response2 = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME, 
                     contents=[key_mapping_prompt], 
@@ -731,11 +759,15 @@ class VinnyLogic(commands.Cog):
             logging.error("An error occurred in _handle_correction.", exc_info=True)
             await message.channel.send("my head's poundin'. somethin went wrong tryin to fix my memory.")
 
+# --- MOOD SCHEDULER ---
+
     async def update_vinny_mood(self):
         if datetime.datetime.now() - self.bot.last_mood_change_time > self.bot.MOOD_CHANGE_INTERVAL:
             self.bot.current_mood = random.choice([m for m in self.bot.MOODS if m != self.bot.current_mood])
             self.bot.last_mood_change_time = datetime.datetime.now()
             logging.info(f"Vinny's mood has changed to: {self.bot.current_mood}")
+
+# --- MEMORY SCHEDULER ---
 
     async def _generate_memory_summary(self, messages):
         if not messages or not self.bot.firestore_service.db: return None
@@ -777,7 +809,7 @@ class VinnyLogic(commands.Cog):
                     logging.info(f"Saved memory summary for guild '{guild.name}'.")
         logging.info("Memory scheduler finished.")
 
-    # cogs/vinny_logic.py
+# --- TAG REQUESTS ---    
 
     async def find_and_tag_member(self, message, user_name: str, times: int = 1):
         MAX_TAGS = 5
@@ -790,21 +822,17 @@ class VinnyLogic(commands.Cog):
             return
         
         target_member = None
-        # --- START: NEW LOGIC TO HANDLE MENTIONS ---
-        # First, check if the user_name is a mention (e.g., <@12345...>)
+
         match = re.match(r'<@!?(\d+)>', user_name)
         if match:
             user_id = int(match.group(1))
             target_member = message.guild.get_member(user_id)
         
-        # If we couldn't find a member by mention, then search by name
         if not target_member:
             target_member = discord.utils.find(lambda m: user_name.lower() in m.display_name.lower(), message.guild.members)
-        
-        # As a final fallback, search by Vinny's custom nicknames
+
         if not target_member:
             target_member = await self._find_user_by_vinny_name(message.guild, user_name)
-        # --- END: NEW LOGIC TO HANDLE MENTIONS ---
         
         if target_member:
             try:
@@ -849,6 +877,8 @@ class VinnyLogic(commands.Cog):
                 await message.channel.send(f"my brain shorted out tryin' to do all that. here, i'll just do it once. hey {target_member.mention}.")
         else:
             await message.channel.send(f"who? i looked all over this joint, couldn't find anyone named '{user_name}'.")
+
+# --- BOT COMMANDS ---
     
     @commands.command(name='help')
     async def help_command(self, ctx):
@@ -927,10 +957,6 @@ class VinnyLogic(commands.Cog):
         else:
             await ctx.send("you ain't married to nobody.")
 
-    # cogs/vinny_logic.py
-
-# ... (other code) ...
-
     @commands.command(name='weather')
     async def weather_command(self, ctx, *, location: str):
         """Gets the current weather and 5-day forecast for a location."""
@@ -939,18 +965,14 @@ class VinnyLogic(commands.Cog):
             if not coords:
                 return await ctx.send(f"eh, couldn't find that place '{location}'. you sure that's a real place?")
 
-            # Fetch both current weather and the 5-day forecast
             current_weather_data = await api_clients.get_weather_data(self.bot.http_session, self.bot.OPENWEATHER_API_KEY, coords['lat'], coords['lon'])
             forecast_data = await api_clients.get_5_day_forecast(self.bot.http_session, self.bot.OPENWEATHER_API_KEY, coords['lat'], coords['lon'])
 
         if not current_weather_data:
             return await ctx.send("found the place but the damn current weather report is all garbled.")
 
-        # --- Create Embeds ---
         city_name = coords.get("name", "Unknown Location")
         embeds = []
-
-        # Page 1: Current Weather
         try:
             main_weather = current_weather_data["weather"][0]
             emoji = constants.get_weather_emoji(main_weather['main'])
@@ -972,7 +994,6 @@ class VinnyLogic(commands.Cog):
         except (KeyError, IndexError):
             return await ctx.send("failed to parse the current weather data. weird.")
 
-        # Page 2: Extended Forecast (Requires processing)
         if forecast_data and forecast_data.get("list"):
             try:
                 embed2 = discord.Embed(
@@ -980,7 +1001,6 @@ class VinnyLogic(commands.Cog):
                     color=discord.Color.dark_blue()
                 )
                 
-                # Logic to process the 3-hour data into daily summaries
                 daily_forecasts = {}
                 for entry in forecast_data["list"]:
                     day = datetime.datetime.fromtimestamp(entry['dt']).strftime('%Y-%m-%d')
@@ -993,14 +1013,12 @@ class VinnyLogic(commands.Cog):
                     daily_forecasts[day]['highs'].append(entry['main']['temp_max'])
                     daily_forecasts[day]['lows'].append(entry['main']['temp_min'])
                     daily_forecasts[day]['icons'].append(entry['weather'][0]['main'])
-
-                # Create a field for each of the next 5 days
+                
                 day_keys = sorted(daily_forecasts.keys())
                 for day in day_keys[:5]:
                     day_name = datetime.datetime.strptime(day, '%Y-%m-%d').strftime('%A')
                     high = max(daily_forecasts[day]['highs'])
                     low = min(daily_forecasts[day]['lows'])
-                    # Get the most common weather condition for the day
                     most_common_icon = max(set(daily_forecasts[day]['icons']), key=daily_forecasts[day]['icons'].count)
                     emoji = constants.get_weather_emoji(most_common_icon)
                     
@@ -1014,14 +1032,11 @@ class VinnyLogic(commands.Cog):
             except Exception:
                 logging.error("Failed to parse 5-day forecast data.", exc_info=True)
 
-
-        # --- Create View with Buttons ---
         class WeatherView(discord.ui.View):
             def __init__(self, embeds):
                 super().__init__(timeout=60)
                 self.embeds = embeds
                 self.current_page = 0
-                # Disable next button if there's only one page
                 if len(self.embeds) < 2:
                     self.children[1].disabled = True
 
@@ -1069,19 +1084,14 @@ class VinnyLogic(commands.Cog):
             embed.timestamp = datetime.datetime.now(ZoneInfo("America/New_York"))
             await ctx.send(embed=embed)
 
-# cogs/vinny_logic.py
-
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
         target_user = ctx.author
         
         if ctx.message.mentions:
             target_user = ctx.message.mentions[0]
-            # Clean the mention from the knowledge string so it's not part of the fact
             knowledge_string = re.sub(r'<@!?\d+>', '', knowledge_string).strip()
 
-        # +++ THIS IS THE MODIFIED LINE +++
-        # We now pass the target user's name along with the string
         extracted_facts = await extract_facts_from_message(self.bot, knowledge_string, author_name=target_user.display_name)
         
         if not extracted_facts:

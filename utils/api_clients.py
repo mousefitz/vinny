@@ -40,12 +40,11 @@ async def generate_image_with_imagen(
         async with http_session.post(api_url, headers=headers, json=data) as response:
             if response.status == 200:
                 result = await response.json()
-                # Check if the expected data is in the response
+                
                 if result.get("predictions") and "bytesBase64Encoded" in result["predictions"][0]:
                     return io.BytesIO(base64.b64decode(result["predictions"][0]["bytesBase64Encoded"]))
                 else:
-                    # +++ NEW LOGGING ADDED HERE +++
-                    # This will log the response if it's 200 OK but doesn't contain an image.
+                    
                     logging.error(f"Imagen API returned 200 OK but the response body was unexpected: {result}")
             else:
                 logging.error(f"Imagen API returned non-200 status: {response.status} | Body: {await response.text()}")
@@ -54,6 +53,7 @@ async def generate_image_with_imagen(
     return None
 
 # --- OpenWeatherMap API ---
+
 async def geocode_location(http_session: aiohttp.ClientSession, api_key: str, location: str):
     if not api_key: return None
     params = {"limit": 1, "appid": api_key}
@@ -88,8 +88,6 @@ async def get_weather_data(http_session: aiohttp.ClientSession, api_key: str, la
         logging.error("Weather data API call failed.", exc_info=True)
     return None
 
-# --- Extended Forecast ---
-
 async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, lat: float, lon: float):
     """Gets a 5-day forecast (in 3-hour intervals) from the standard free endpoint."""
     if not api_key: return None
@@ -114,6 +112,7 @@ async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, 
     return None
 
 # --- Horoscope API ---
+
 async def get_horoscope(http_session: aiohttp.ClientSession, sign: str):
     if not http_session: return None
     url = "https://horoscope-app-api.vercel.app/api/v1/get-horoscope/daily"
