@@ -37,7 +37,12 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
             contents=[types.Content(role='user', parts=[types.Part(text=fact_extraction_prompt)])],
             config=bot_instance.GEMINI_TEXT_CONFIG
         )
-        if not response: return None
+        
+        # --- THIS IS THE CHECK ---
+        if not response: 
+            logging.error("Fact extraction failed (API call aborted or failed).")
+            return None 
+        
         raw_text = response.text.strip()
         json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', raw_text, re.DOTALL)
         if json_match:

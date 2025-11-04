@@ -33,8 +33,11 @@ async def get_short_term_summary(bot_instance, message_history: list):
             model=bot_instance.MODEL_NAME,
             contents=[summary_prompt]
         )
+        
+        # --- THIS IS THE CHECK ---
         if response:
             return response.text.strip()
+            
     except Exception:
         logging.error("Failed to generate short-term summary.", exc_info=True)
     return ""
@@ -62,6 +65,12 @@ async def get_message_sentiment(bot_instance, message_content: str):
             model=bot_instance.MODEL_NAME,
             contents=[sentiment_prompt]
         )
+        
+        # --- THIS IS THE CHECK ---
+        if not response:
+            logging.error("Failed to get message sentiment (API call aborted or failed).")
+            return "neutral"
+        
         json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
         if json_match:
             json_string = json_match.group(1) or json_match.group(2)
@@ -100,7 +109,6 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
     
     json_string = "" 
     try:
-        
         json_config = types.GenerateContentConfig(
             response_mime_type="application/json"
         )
@@ -110,7 +118,11 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
             contents=[intent_prompt],
             config=json_config 
         )
-        if not response: return "general_conversation", {}
+        
+        # --- THIS IS THE CHECK ---
+        if not response: 
+            return "general_conversation", {}
+            
         intent_data = json.loads(response.text)
         return intent_data.get("intent"), intent_data.get("args", {})
 
@@ -143,7 +155,11 @@ async def triage_question(bot_instance, question_text: str) -> str:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME, contents=[triage_prompt], config=json_config
         )
-        if not response: return "personal_opinion"
+        
+        # --- THIS IS THE CHECK ---
+        if not response: 
+            return "personal_opinion"
+            
         data = json.loads(response.text)
         return data.get("question_type", "personal_opinion")
     except Exception:
@@ -396,7 +412,11 @@ class VinnyLogic(commands.Cog):
             try:
                 thinking_prompt = (f"You are Vinny, an eccentric artist. A user just asked you to paint '{image_prompt}'. Generate a very short, in-character phrase (in lowercase with typos) that you would say as you're about to start painting. Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and rum', 'aight aight i hear ya...'")
                 response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[thinking_prompt], config=self.text_gen_config)
-                if response and response.text: thinking_message = response.text.strip()
+                
+                # --- CHECK 1 ---
+                if response and response.text: 
+                    thinking_message = response.text.strip()
+                    
             except Exception as e: logging.warning(f"Failed to generate dynamic thinking message: {e}")
             await message.channel.send(thinking_message)
 
@@ -416,6 +436,8 @@ class VinnyLogic(commands.Cog):
             smarter_prompt = image_prompt
             try:
                 response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[prompt_rewriter_instruction], config=self.text_gen_config)
+                
+                # --- CHECK 2 ---
                 if response:
                     json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
                     if json_match:
@@ -439,6 +461,8 @@ class VinnyLogic(commands.Cog):
                     "Return only the revised, safe-to-use prompt."
                 )
                 response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[safety_check_prompt], config=self.text_gen_config)
+                
+                # --- CHECK 3 ---
                 if response and response.text:
                     final_prompt = response.text.strip()
                     logging.info(f"Original prompt: '{smarter_prompt}' | Sanitized prompt: '{final_prompt}'")
@@ -456,7 +480,11 @@ class VinnyLogic(commands.Cog):
                         types.Part(inline_data=types.Blob(mime_type="image/png", data=image_bytes))
                     ]
                     response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[types.Content(parts=prompt_parts)])
-                    if response and response.text: response_text = response.text.strip()
+                    
+                    # --- CHECK 4 ---
+                    if response and response.text: 
+                        response_text = response.text.strip()
+                        
                 except Exception: logging.error("Failed to generate creative image comment.", exc_info=True)
                 image_file.seek(0)
                 await message.channel.send(response_text, file=discord.File(image_file, filename="vinny_masterpiece.png"))
@@ -468,7 +496,7 @@ class VinnyLogic(commands.Cog):
     async def _handle_image_reply(self, reply_message: discord.Message, original_message: discord.Message):
         try:
             image_url = None
-            mime_type = 'image/png'  
+            mime_type = 'image/png'
 
             if original_message.embeds and original_message.embeds[0].image:
                 image_url = original_message.embeds[0].image.url
@@ -504,6 +532,8 @@ class VinnyLogic(commands.Cog):
                     model=self.bot.MODEL_NAME,
                     contents=[types.Content(parts=prompt_parts)]
                 )
+                
+                # --- THIS IS THE CHECK ---
                 if response and response.text:
                     for chunk in self.bot.split_message(response.text): 
                         await reply_message.channel.send(chunk.lower())
@@ -547,6 +577,8 @@ class VinnyLogic(commands.Cog):
                 contents=[reply_prompt],
                 config=self.text_gen_config
             )
+            
+            # --- THIS IS THE CHECK ---
             if response and response.text:
                 cleaned_response = response.text.strip()
                 if cleaned_response and cleaned_response.lower() != '[silence]':
@@ -606,9 +638,8 @@ class VinnyLogic(commands.Cog):
 
             if is_autonomous and summary:
                 final_instruction_text = (f"Your mood is {self.bot.current_mood}. You are autonomously chiming in. The current topic is: '{summary}'. Make a chaotic, funny, or flirty comment.")
-# CONTEXT BLEED FIX
-            participants = set()
 
+            participants = set()
             async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH, before=message):
                 if not msg.author.bot:
                     participants.add(msg.author.display_name)
@@ -622,7 +653,7 @@ class VinnyLogic(commands.Cog):
                 f"CRITICAL RULE: You MUST correctly attribute all statements and questions to the person who actually said them. Pay close attention to the names. Do not confuse speakers."
             )
             final_instruction_text += attribution_instruction
-            
+
             history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text)]))
             
             final_user_message_text = f"{message.author.display_name} (ID: {message.author.id}): {cleaned_content}"
@@ -638,6 +669,7 @@ class VinnyLogic(commands.Cog):
 
             response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=history, config=config)
 
+            # --- THIS IS THE CHECK ---
             if response and response.text:
                 cleaned_response = response.text.strip()
                 if cleaned_response and cleaned_response.lower() != '[silence]':
@@ -679,8 +711,11 @@ class VinnyLogic(commands.Cog):
                     contents=[summary_prompt], 
                     config=self.text_gen_config
                 )
+                
+                # --- THIS IS THE CHECK ---
                 if response:
                     await message.channel.send(response.text.strip())
+                    
         except Exception:
             logging.error("Failed to generate knowledge summary.", exc_info=True)
             await message.channel.send("my head's all fuzzy. i know some stuff but the words ain't comin' out right.")
@@ -701,8 +736,11 @@ class VinnyLogic(commands.Cog):
         try:
             async with message.channel.typing():
                 response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[synthesis_prompt], config=self.text_gen_config)
+                
+                # --- THIS IS THE CHECK ---
                 if response:
                     await message.channel.send(response.text.strip())
+                    
         except Exception:
             logging.error("Failed to generate server knowledge summary.", exc_info=True)
             await message.channel.send("my head's a real mess. i've been listenin', but it's all just noise right now.")
@@ -717,12 +755,14 @@ class VinnyLogic(commands.Cog):
         try:
             json_config = types.GenerateContentConfig(response_mime_type="application/json")
             async with message.channel.typing():
-
+                # First API Call
                 response1 = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME, 
                     contents=[correction_prompt], 
                     config=json_config
                 )
+                
+                # --- CHECK 1 ---
                 if not response1 or not response1.text:
                     await message.channel.send("my brain's all fuzzy, i didn't get what i was wrong about."); return
                 
@@ -737,11 +777,14 @@ class VinnyLogic(commands.Cog):
                 
                 key_mapping_prompt = (f"A user's profile is stored as a JSON object. I need to find the key that corresponds to the fact: \"{fact_to_remove}\".\nHere is the user's current profile data: {json.dumps(user_profile, indent=2)}\nBased on the data, which key is the most likely match for the fact I need to remove? Return a JSON object with a single key, \"database_key\".\n\nExample:\nFact: 'is a painter'\nProfile: {{\"occupation\": \"a painter\"}}\nOutput: {{\"database_key\": \"occupation\"}}")
                 
+                # Second API Call
                 response2 = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME, 
                     contents=[key_mapping_prompt], 
                     config=json_config
                 )
+                
+                # --- CHECK 2 ---
                 if not response2 or not response2.text:
                     await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird."); return
                 
@@ -774,8 +817,10 @@ class VinnyLogic(commands.Cog):
         summary_instruction = ("You are a conversation summarization assistant. Analyze the following conversation and provide a concise, one-paragraph summary. After the summary, provide a list of 3-5 relevant keywords. Your output must contain 'summary:' and 'keywords:' labels.")
         summary_prompt = f"{summary_instruction}\n\n...conversation:\n" + "\n".join([f"{msg['author']}: {msg['content']}" for msg in messages])
         try:
-            response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[summary_prompt], config=self.text_gen_config)
-            if response.text:
+            response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[summary_prompt], config=self.text_gen_config)
+            
+            # --- THIS IS THE CHECK ---
+            if response and response.text:
                 summary_match = re.search(r"summary:\s*(.*?)(keywords:|$)", response.text, re.DOTALL | re.IGNORECASE)
                 keywords_match = re.search(r"keywords:\s*(.*)", response.text, re.DOTALL | re.IGNORECASE)
                 summary = summary_match.group(1).strip() if summary_match else response.text.strip()
@@ -822,7 +867,6 @@ class VinnyLogic(commands.Cog):
             return
         
         target_member = None
-
         match = re.match(r'<@!?(\d+)>', user_name)
         if match:
             user_id = int(match.group(1))
@@ -830,7 +874,7 @@ class VinnyLogic(commands.Cog):
         
         if not target_member:
             target_member = discord.utils.find(lambda m: user_name.lower() in m.display_name.lower(), message.guild.members)
-
+        
         if not target_member:
             target_member = await self._find_user_by_vinny_name(message.guild, user_name)
         
@@ -858,12 +902,14 @@ class VinnyLogic(commands.Cog):
                     f"- Incorrect Output Message: 'hey @enraged, i wanted to say hi'"
                 )
                 
-                api_response = await self.bot.gemini_client.aio.models.generate_content(
+                api_response = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME,
                     contents=[tagging_prompt],
                     config=self.text_gen_config
                 )
-                if api_response.text:
+                
+                # --- THIS IS THE CHECK ---
+                if api_response and api_response.text:
                     json_string_match = re.search(r'```json\s*(\{.*?\})\s*```', api_response.text, re.DOTALL) or re.search(r'(\{.*?\})', api_response.text, re.DOTALL)
                     message_data = json.loads(json_string_match.group(1))
                     messages_to_send = message_data.get("messages", [])
@@ -874,7 +920,8 @@ class VinnyLogic(commands.Cog):
                     return
             except Exception:
                 logging.error("Failed to generate or parse multi-tag response.", exc_info=True)
-                await message.channel.send(f"my brain shorted out tryin' to do all that. here, i'll just do it once. hey {target_member.mention}.")
+                
+            await message.channel.send(f"my brain shorted out tryin' to do all that. here, i'll just do it once. hey {target_member.mention}.")
         else:
             await message.channel.send(f"who? i looked all over this joint, couldn't find anyone named '{user_name}'.")
 
@@ -1074,8 +1121,12 @@ class VinnyLogic(commands.Cog):
             vinnyfied_text = boring_horoscope
             try:
                 rewrite_prompt = (f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nYou must rewrite a boring horoscope into a chaotic, flirty, and slightly unhinged one in your own voice. The user's sign is **{clean_sign.title()}**. The boring horoscope is: \"{boring_horoscope}\"\n\n## INSTRUCTIONS:\nGenerate a short, single-paragraph monologue that gives you their horoscope in your unique, chaotic style. Do not just repeat the horoscope; interpret it with your personality.")
-                response = await self.bot.gemini_client.aio.models.generate_content(model=self.bot.MODEL_NAME, contents=[rewrite_prompt], config=self.text_gen_config)
-                if response.text: vinnyfied_text = response.text.strip()
+                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[rewrite_prompt], config=self.text_gen_config)
+                
+                # --- THIS IS THE CHECK ---
+                if response and response.text: 
+                    vinnyfied_text = response.text.strip()
+                    
             except Exception: logging.error("Failed to Vinny-fy the horoscope.", exc_info=True)
             emoji = constants.SIGN_EMOJIS.get(clean_sign, "✨")
             embed = discord.Embed(title=f"{emoji} Horoscope for {clean_sign.title()}", description=vinnyfied_text, color=discord.Color.dark_purple())
@@ -1122,12 +1173,18 @@ class VinnyLogic(commands.Cog):
                 f"2.  Then, generate a short, lowercase, typo-ridden confirmation that shows you understand this complete thought. Acknowledge that **The Teacher** taught you this."
             )
             try:
-                response = await self.bot.gemini_client.aio.models.generate_content(
+                response = await self.bot.make_tracked_api_call(
                     model=self.bot.MODEL_NAME,
                     contents=[confirmation_prompt],
                     config=self.text_gen_config
                 )
-                await ctx.send(response.text.strip())
+                
+                # --- THIS IS THE CHECK ---
+                if response and response.text:
+                    await ctx.send(response.text.strip())
+                else:
+                    raise Exception("API call failed or returned no text.")
+                    
             except Exception:
                 logging.error("Failed to generate dynamic confirmation for !vinnyknows.", exc_info=True)
                 await ctx.send(f"aight, i got it. so {'your' if target_user == ctx.author else f'{target_user.display_name}\'s'} {facts_confirmation}. vinny will remember.")
