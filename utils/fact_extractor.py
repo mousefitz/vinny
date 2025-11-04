@@ -12,25 +12,31 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
     if isinstance(message_or_str, discord.Message):
         user_name = message_or_str.author.display_name
         user_message = message_or_str.content
-    else: # It's a string
+    else: 
         user_name = author_name
         user_message = str(message_or_str)
 
     fact_extraction_prompt = (
         f"You are a highly accurate fact-extraction system. The user '{user_name}' wrote the following message. "
-        "Your task is to analyze the message and identify any personal facts about the subject of the sentence. "
+        "Your task is to analyze the message and identify any personal facts **about the user '{user_name}' ONLY**. "
         "Your output must be a valid JSON object.\n\n"
         "## Rules:\n"
-        "1.  **Identify the Subject:** The subject of the fact could be the author ('I', 'my') or another person mentioned in the text. The author's name is '{user_name}'.\n"
-        "2.  **Determine the Key:** The key for the JSON object should be a descriptive noun or attribute (e.g., 'pet', 'favorite color', 'hometown').\n"
-        "3.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective.\n"
-        "4.  **Return JSON:** If no facts are found, return an empty JSON object: {}.\n\n"
+        "1.  **Identify the Subject:** The subject of the fact MUST be the author ('I', 'my', 'me').\n"
+        "2.  **IGNORE Third-Party Facts:** If the message is about someone else (e.g., 'Alyssa likes pie', 'his car is red'), you MUST return an empty JSON object.\n"
+        "3.  **Determine the Key:** The key for the JSON object should be a descriptive noun or attribute (e.g., 'pet', 'favorite color', 'hometown').\n"
+        "4.  **Handle Pronouns Neutrally:** When the subject is 'I' or 'my', convert the fact to a gender-neutral, third-person perspective.\n"
+        "5.  **Return JSON:** If no facts about the author are found, return an empty JSON object: {}.\n\n"
         "## Examples:\n"
-        "-   Author: 'Mouse', Message: 'I have a cat named chumba' -> {\"pet\": \"a cat named chumba\"}\n"
-        "-   Author: 'Mouse', Message: 'enraged is my boyfriend' -> {\"relationship\": \"is their boyfriend\"}\n\n"
+        "-   Author: 'Mouse', Message: 'I have a cat named toast' -> {\"pet\": \"a cat named toast\"}\n"
+        "-   Author: 'Mouse', Message: 'I am a scheduler' -> {\"occupation\": \"a scheduler\"}\n"
+        "-   Author: 'Mouse', Message: 'my favorite color is purple' -> {\"favorite_color\": \"purple\"}\n"
+        "-   Author: 'Mouse', Message: 'enraged is my boyfriend' -> {\"relationship\": \"is their boyfriend\"}\n"
+        "-   Author: 'Mouse', Message: 'Alyssa said she likes chef boyardee' -> {}\n"
+        "-   Author: 'Mouse', Message: 'that guy is tall' -> {}\n\n"
         f"## User Message to Analyze:\n"
         f"Author: '{user_name}', Message: \"{user_message}\""
     )
+    
     try:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
@@ -38,7 +44,6 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
             config=bot_instance.GEMINI_TEXT_CONFIG
         )
         
-        # --- THIS IS THE CHECK ---
         if not response: 
             logging.error("Fact extraction failed (API call aborted or failed).")
             return None 
