@@ -115,8 +115,8 @@ class VinnyBot(commands.Bot):
         self.MOOD_CHANGE_INTERVAL = datetime.timedelta(hours=3)
         self.PASSIVE_LEARNING_ENABLED = True
         self.autonomous_mode_enabled = True
-        self.autonomous_reply_chance = 0.05
-        self.reaction_chance = 0.15
+        self.autonomous_reply_chance = 0.01
+        self.reaction_chance = 0.05
         
         # --- Rate Limiting ---
         self.TEXT_GENERATION_LIMIT = constants.TEXT_GENERATION_LIMIT
