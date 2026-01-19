@@ -195,13 +195,57 @@ class VinnyLogic(commands.Cog):
         elif isinstance(error, commands.is_owner): await ctx.send("heh. nice try, pal.")
         else: await ctx.send("ah crap, my brain just shorted out. somethin' went wrong with that command.")
 
+    # --- EMBED FIXER ---
+
+    async def _check_and_fix_embeds(self, message: discord.Message) -> bool:
+        """
+        Scans messages for broken social media links and replies with a fixed embed version.
+        Uses verified 'kk' domains for 2026 stability.
+        Returns True if a fix was sent.
+        """
+        content = message.content
+        fixed_url = None
+        
+        # 1. Instagram
+        if "instagram.com/" in content and "kkinstagram.com" not in content:
+            fixed_url = content.replace("instagram.com", "kkinstagram.com")
+            
+        # 2. TikTok
+        elif "tiktok.com/" in content and "kktiktok.com" not in content:
+            fixed_url = content.replace("tiktok.com", "kktiktok.com")
+
+        # 3. Twitter / X
+        elif ("twitter.com/" in content or "x.com/" in content) and "fixupx.com" not in content:
+            fixed_url = content.replace("twitter.com", "fixupx.com").replace("x.com", "fixupx.com")
+
+        # 4. YouTube Shorts
+        elif "youtube.com/shorts/" in content:
+            match = re.search(r"youtube\.com/shorts/([a-zA-Z0-9_-]+)", content)
+            if match:
+                video_id = match.group(1)
+                fixed_url = f"https://www.youtube.com/watch?v={video_id}"
+
+        if fixed_url:
+            await message.channel.send(f"fixed that embed for ya:\n{fixed_url}")
+            try:
+                await message.edit(suppress=True)
+            except (discord.Forbidden, Exception):
+                pass
+            return True
+            
+        return False
+    
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         bot_names = ["vinny", "vincenzo", "vin vin"]
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
-           
+            if await self._check_and_fix_embeds(message):
+                # If Vinny fixed a link, we usually want him to stop there 
+                # UNLESS he was specifically mentioned/pinged in the same message.
+                if not (self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names)):
+                    return
             if await self._is_a_correction(message):
                 return await self._handle_correction(message)
             
