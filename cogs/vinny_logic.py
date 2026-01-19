@@ -451,23 +451,22 @@ class VinnyLogic(commands.Cog):
                 logging.warning(f"Failed to rewrite image prompt, using original.", exc_info=True)
 
             final_prompt = smarter_prompt
-            try:
-                safety_check_prompt = (
-                    "Review the following image generation prompt. Your only task is to identify and replace any words that might "
-                    "violate a strict safety policy (e.g., words related to violence, hate, explicit content, or other sensitive topics), "
-                    "even if used in an artistic context. **You MUST preserve the original subject of the prompt.**\n\n"
-                    f"Original Prompt: \"{smarter_prompt}\"\n\n"
-                    f"Core Subject to Preserve: \"{image_prompt}\"\n\n"
-                    "Return only the revised, safe-to-use prompt."
-                )
-                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[safety_check_prompt], config=self.text_gen_config)
-                
-                # --- CHECK 3 ---
-                if response and response.text:
-                    final_prompt = response.text.strip()
-                    logging.info(f"Original prompt: '{smarter_prompt}' | Sanitized prompt: '{final_prompt}'")
-            except Exception as e: logging.error("Failed to sanitize the image prompt.", exc_info=True)
             
+            # --- COMMENT OUT OR REMOVE THIS WHOLE BLOCK TO DISABLE THE PRE-FILTER ---
+            # try:
+            #     safety_check_prompt = (
+            #         "Review the following image generation prompt. Your only task is to identify and replace any words that might "
+            #         "violate a strict safety policy..." 
+            #     )
+            #     response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[safety_check_prompt], config=self.text_gen_config)
+            #     
+            #     if response and response.text:
+            #         final_prompt = response.text.strip()
+            #         logging.info(f"Original prompt: '{smarter_prompt}' | Sanitized prompt: '{final_prompt}'")
+            # except Exception as e: logging.error("Failed to sanitize the image prompt.", exc_info=True)
+            # -----------------------------------------------------------------------
+
+            # Now the raw, enhanced prompt goes directly to Imagen with your new permissive settings.
             image_file = await api_clients.generate_image_with_imagen(self.bot.http_session, self.bot.loop, final_prompt, self.bot.GCP_PROJECT_ID, self.bot.FIREBASE_B64)
             if image_file:
                 response_text = "here, i made this for ya."
