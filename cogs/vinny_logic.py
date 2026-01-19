@@ -224,9 +224,13 @@ class VinnyLogic(commands.Cog):
             if match:
                 video_id = match.group(1)
                 fixed_url = f"https://www.youtube.com/watch?v={video_id}"
-
+        
+        # 5. YouTube Music (music.youtube.com -> youtube.com)
+        elif "music.youtube.com/" in content:
+            fixed_url = content.replace("music.youtube.com", "youtube.com")
         if fixed_url:
             await message.channel.send(f"fixed that embed for ya:\n{fixed_url}")
+            
             try:
                 await message.edit(suppress=True)
             except (discord.Forbidden, Exception):
