@@ -8,12 +8,15 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from google.cloud.firestore_v1.base_client import BaseClient
 from . import constants
+from cachetools import TTLCache
 
 class FirestoreService:
     def __init__(self, loop: Coroutine, firebase_b64_creds: str, app_id: str):
         self.db = self._initialize_firebase(firebase_b64_creds)
         self.loop = loop
         self.APP_ID = app_id
+        # NEW: Cache up to 1000 profiles for 5 minutes (300 seconds)
+        self.profile_cache = TTLCache(maxsize=1000, ttl=300)
 
     def _initialize_firebase(self, firebase_b64_creds: str) -> BaseClient | None:
         if not firebase_b64_creds:
@@ -70,38 +73,50 @@ class FirestoreService:
 
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: return False
-        key = key.lower().replace(' ', '_')
-        path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
-        data_to_save = {key: value}
+        
+        # NEW: Invalidate cache because data is changing
+        cache_key = f"{user_id}_{guild_id}"
+        if cache_key in self.profile_cache:
+            del self.profile_cache[cache_key]
+
+        # Existing Save Logic
+        collection_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
+        doc_ref = self.db.collection(collection_path).document(user_id)
+        
         try:
-            profile_ref = self.db.collection(path).document(user_id)
-            await self.loop.run_in_executor(None, lambda: profile_ref.set(data_to_save, merge=True))
-            logging.info(f"Saved fact '{key}' for user '{user_id}' in path '{path}'.")
+            await self.loop.run_in_executor(None, lambda: doc_ref.set({key: value}, merge=True))
             return True
         except Exception:
-            logging.error(f"CRITICAL SAVE FAILURE for user '{user_id}' in path '{path}'", exc_info=True)
+            logging.error(f"Failed to save fact for user {user_id}", exc_info=True)
             return False
 
     async def get_user_profile(self, user_id: str, guild_id: str | None) -> dict:
         if not self.db: return {}
-        global_profile, server_profile = {}, {}
         
-        try:
-            global_path = constants.get_user_profile_collection_path(self.APP_ID, None)
-            doc = await self.loop.run_in_executor(None, self.db.collection(global_path).document(user_id).get)
-            if doc.exists: global_profile = doc.to_dict()
-        except Exception:
-            logging.warning(f"Could not retrieve global profile for user '{user_id}'", exc_info=True)
+        # NEW: Check cache first
+        cache_key = f"{user_id}_{guild_id}"
+        if cache_key in self.profile_cache:
+            return self.profile_cache[cache_key]
+
+        # Existing Fetch Logic
+        global_path = constants.get_global_user_profiles_path(self.APP_ID)
+        server_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id) if guild_id else None
         
-        if guild_id:
-            try:
-                server_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
-                doc = await self.loop.run_in_executor(None, self.db.collection(server_path).document(user_id).get)
-                if doc.exists: server_profile = doc.to_dict()
-            except Exception:
-                logging.warning(f"Could not retrieve server profile for user '{user_id}' in guild '{guild_id}'", exc_info=True)
+        global_doc_ref = self.db.collection(global_path).document(user_id)
+        global_doc = await self.loop.run_in_executor(None, global_doc_ref.get)
+        global_profile = global_doc.to_dict() if global_doc.exists else {}
+
+        server_profile = {}
+        if server_path:
+            server_doc_ref = self.db.collection(server_path).document(user_id)
+            server_doc = await self.loop.run_in_executor(None, server_doc_ref.get)
+            server_profile = server_doc.to_dict() if server_doc.exists else {}
+            
+        full_profile = global_profile | server_profile
         
-        return global_profile | server_profile
+        # NEW: Save to cache
+        self.profile_cache[cache_key] = full_profile
+        return full_profile
 
     async def delete_user_profile(self, user_id: str, guild_id: str):
         if not self.db: return False

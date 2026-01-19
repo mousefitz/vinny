@@ -267,26 +267,29 @@ class VinnyLogic(commands.Cog):
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
                     else: 
-                        user_sentiment = await get_message_sentiment(self.bot, message.content)
-                        sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
-                        score_change = sentiment_score_map.get(user_sentiment, 0)
-                        if message.guild:
-                            new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
-                            await self._update_relationship_status(str(message.author.id), str(message.guild.id), new_total_score)
+                        # --- OPTIMIZATION START: Run sentiment analysis in the background ---
+                        async def update_sentiment_background():
+                            try:
+                                user_sentiment = await get_message_sentiment(self.bot, message.content)
+                                sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
+                                score_change = sentiment_score_map.get(user_sentiment, 0)
+                                
+                                if message.guild:
+                                    new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
+                                    await self._update_relationship_status(str(message.author.id), str(message.guild.id), new_total_score)
+                                
+                                await self.update_mood_based_on_sentiment(user_sentiment)
+                                await self.update_vinny_mood()
+                            except Exception as e:
+                                logging.error(f"Background sentiment update failed: {e}")
+
+                        # Fire and forget - don't wait for it
+                        asyncio.create_task(update_sentiment_background())
+                        # --- OPTIMIZATION END ---
                         
-                        await self.update_mood_based_on_sentiment(user_sentiment)
-                        await self.update_vinny_mood()
-                        
-                        summary = ""
-                        if is_autonomous and message.guild:
-                            message_history = []
-                            async for msg in message.channel.history(limit=5):
-                                message_history.append(f"{msg.author.display_name}: {msg.content}")
-                            message_history.reverse()
-                            summary = await get_short_term_summary(self.bot, message_history)
-                        
+                        # Proceed immediately to reply
                         await self._handle_text_or_image_response(
-                            message, is_autonomous=is_autonomous, summary=summary
+                            message, is_autonomous=is_autonomous, summary=None
                         )
                 
                 if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
@@ -638,8 +641,15 @@ class VinnyLogic(commands.Cog):
                     f"Respond to the user in your 'Vinny' persona based on the conversation history. Your mood is {self.bot.current_mood}."
                 )
 
-            if is_autonomous and summary:
-                final_instruction_text = (f"Your mood is {self.bot.current_mood}. You are autonomously chiming in. The current topic is: '{summary}'. Make a chaotic, funny, or flirty comment.")
+            if is_autonomous: 
+                final_instruction_text = (
+                    f"Your mood is {self.bot.current_mood}. You are 'hanging out' in this chat server and just reading the messages above. "
+                    "Your task is to chime in naturally as if you were just another user.\n"
+                    "RULES:\n"
+                    "1. DO NOT summarize the conversation (e.g., don't say 'It seems you are talking about...').\n"
+                    "2. Pick ONE specific thing a user said above and react to it directly, or make a chaotic joke related to the context.\n"
+                    "3. Be brief. Real chat users don't write paragraphs."
+                )
 
             participants = set()
             async for msg in message.channel.history(limit=self.bot.MAX_CHAT_HISTORY_LENGTH, before=message):
