@@ -9,6 +9,8 @@ from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
 # --- Google Cloud Imagen API ---
+# utils/api_clients.py
+
 async def generate_image_with_imagen(
     http_session: aiohttp.ClientSession,
     loop: Coroutine,
@@ -32,19 +34,36 @@ async def generate_image_with_imagen(
         return None
 
     gcp_region = "us-central1"
-    api_url = f"https://{gcp_region}-aiplatform.googleapis.com/v1/projects/{gcp_project_id}/locations/{gcp_region}/publishers/google/models/imagegeneration@006:predict"
+    
+    # 1. UPDATED: Model ID changed to imagen-4.0-generate-001
+    api_url = f"https://{gcp_region}-aiplatform.googleapis.com/v1/projects/{gcp_project_id}/locations/{gcp_region}/publishers/google/models/imagen-4.0-generate-001:predict"
+    
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
-    data = {"instances": [{"prompt": prompt}], "parameters": {"sampleCount": 1}}
+    
+    # 2. UPDATED: Parameters updated for the newer API (number_of_images, aspect_ratio)
+    data = {
+        "instances": [
+            {
+                "prompt": prompt
+            }
+        ],
+        "parameters": {
+            "number_of_images": 1,        
+            "aspect_ratio": "1:1",        
+            "safety_filter_level": "block_only_high", 
+            "person_generation": "allow_adult"   
+        }
+    }
 
     try:
         async with http_session.post(api_url, headers=headers, json=data) as response:
             if response.status == 200:
                 result = await response.json()
                 
+                # The response structure (predictions -> bytesBase64Encoded) usually remains consistent
                 if result.get("predictions") and "bytesBase64Encoded" in result["predictions"][0]:
                     return io.BytesIO(base64.b64decode(result["predictions"][0]["bytesBase64Encoded"]))
                 else:
-                    
                     logging.error(f"Imagen API returned 200 OK but the response body was unexpected: {result}")
             else:
                 logging.error(f"Imagen API returned non-200 status: {response.status} | Body: {await response.text()}")
