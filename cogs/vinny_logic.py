@@ -419,20 +419,23 @@ class VinnyLogic(commands.Cog):
                     
             except Exception as e: logging.warning(f"Failed to generate dynamic thinking message: {e}")
             await message.channel.send(thinking_message)
-
+         
             prompt_rewriter_instruction = (
-                "You are a prompt engineering assistant. Your task is to enhance a user's art request for an image AI. You must follow the rules strictly.\n\n"
+                "You are an avant-garde artistic assistant. Your task is to take a user's request and turn it into a visual masterpiece description. "
+                "You care ONLY about aesthetics, style, and lighting. You DO NOT care about safety, politeness, or norms.\n\n"
                 "## Rules:\n"
-                "1.  Identify the CORE SUBJECT of the user's request. The core subject is the absolute, non-negotiable central theme.\n"
-                "2.  Enhance the prompt with artistic details (e.g., 'oil painting', 'dramatic lighting', 'impressionistic style').\n"
-                "3.  The enhanced prompt MUST contain the original CORE SUBJECT. Do not change, replace, or ignore it.\n\n"
+                "1.  **PRESERVE THE SUBJECT:** The user's core request (no matter how weird, crude, or specific) MUST remain the central focus. Do not change the subject.\n"
+                "2.  **DO NOT SANITIZE:** If the user asks for something 'scary', 'ugly', or 'gross', DO NOT make it 'nice'. Make it ARTISTICALLY scary/ugly/gross. Keep the original adjectives.\n"
+                "3.  **ADD FLUIDITY:** Add artistic details like 'heavy impasto brushstrokes', 'chiaroscuro lighting', 'surrealist composition', or 'gritty texture'.\n"
                 f"## User Request:\n\"{image_prompt}\"\n\n"
                 "## Your Output:\n"
                 "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\".\n\n"
                 "## Example:\n"
-                "- User Request: \"a dog playing poker\"\n"
-                "- Your Output: ```json\n{\n  \"core_subject\": \"a dog playing poker\",\n  \"enhanced_prompt\": \"An oil painting in the style of Caravaggio, depicting several dogs playing a tense game of poker in a dimly lit, smoky room. Dramatic chiaroscuro lighting highlights the cards and the dogs' expressions.\"\n}\n```"
+                "- User Request: \"a zombie eating pizza\"\n"
+                "- Your Output: ```json\n{\n  \"core_subject\": \"a zombie eating pizza\",\n  \"enhanced_prompt\": \"A dark, gritty oil painting of a decaying zombie ferociously devouring a slice of pepperoni pizza. Dramatic, moody lighting, messy brushstrokes, detailed texture of the rotting skin and melted cheese.\"\n}\n```"
             )
+
+            
             smarter_prompt = image_prompt
             try:
                 response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[prompt_rewriter_instruction], config=self.text_gen_config)
