@@ -197,47 +197,50 @@ class VinnyLogic(commands.Cog):
 
     # --- EMBED FIXER ---
 
-    async def _check_and_fix_embeds(self, message: discord.Message) -> bool:
+    async def _check_and_fix_embeds(self, message: discord.Message):
         """
-        Scans messages for broken social media links and replies with a fixed embed version.
-        Uses verified 'kk' domains for 2026 stability.
-        Returns True if a fix was sent.
+        Scans for broken links, WAITS to see if Discord fixes them automatically,
+        and only provides a manual fix if the embed fails to load.
         """
         content = message.content
         fixed_url = None
         
-        # 1. Instagram
+        # --- Identify Potential Fixes ---
         if "instagram.com/" in content and "kkinstagram.com" not in content:
             fixed_url = content.replace("instagram.com", "kkinstagram.com")
-            
-        # 2. TikTok
         elif "tiktok.com/" in content and "kktiktok.com" not in content:
             fixed_url = content.replace("tiktok.com", "kktiktok.com")
-
-        # 3. Twitter / X
         elif ("twitter.com/" in content or "x.com/" in content) and "fixupx.com" not in content:
             fixed_url = content.replace("twitter.com", "fixupx.com").replace("x.com", "fixupx.com")
-
-        # 4. YouTube Shorts
         elif "youtube.com/shorts/" in content:
             match = re.search(r"youtube\.com/shorts/([a-zA-Z0-9_-]+)", content)
-            if match:
-                video_id = match.group(1)
-                fixed_url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        # 5. YouTube Music (music.youtube.com -> youtube.com)
+            if match: fixed_url = f"https://www.youtube.com/watch?v={match.group(1)}"
         elif "music.youtube.com/" in content:
             fixed_url = content.replace("music.youtube.com", "youtube.com")
+
+        # --- The "Smart Check" Logic ---
         if fixed_url:
-            await message.channel.send(f"fixed that embed for ya:\n{fixed_url}")
-            
+            # 1. Wait 3 seconds for Discord to attempt its own embed
+            await asyncio.sleep(3) 
+
             try:
-                await message.edit(suppress=True)
-            except (discord.Forbidden, Exception):
-                pass
-            return True
-            
-        return False
+                # 2. Re-fetch the message to get the latest embed data
+                refreshed_message = await message.channel.fetch_message(message.id)
+                
+                # 3. If Discord successfully embedded it, we do NOTHING.
+                if refreshed_message.embeds:
+                    return
+
+                # 4. If no embed exists, Vinny saves the day.
+                await message.channel.send(f"fixed that embed for ya:\n{fixed_url}")
+                try:
+                    await message.edit(suppress=True) # Hide the ugly original link
+                except: pass
+                
+            except discord.NotFound:
+                pass # Message was deleted while we were waiting
+            except Exception as e:
+                logging.error(f"Failed to check/fix embed: {e}")
     
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -245,11 +248,8 @@ class VinnyLogic(commands.Cog):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
-            if await self._check_and_fix_embeds(message):
-                # If Vinny fixed a link, we usually want him to stop there 
-                # UNLESS he was specifically mentioned/pinged in the same message.
-                if not (self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names)):
-                    return
+            asyncio.create_task(self._check_and_fix_embeds(message))
+
             if await self._is_a_correction(message):
                 return await self._handle_correction(message)
             
