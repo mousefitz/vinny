@@ -6,6 +6,7 @@ import random
 import re
 import json
 import logging
+import contextlib
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING, Coroutine
 from google import genai
@@ -285,8 +286,8 @@ class VinnyLogic(commands.Cog):
 
             if should_respond:
                 intent, args = await get_intent_from_prompt(self.bot, message)
-
-                async with message.channel.typing():
+                typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
+                async with typing_ctx:
                     if intent == "generate_image":
                         prompt = args.get("prompt", "something, i guess. they didn't say what.")
                         await self._handle_image_request(message, prompt)
@@ -732,9 +733,30 @@ class VinnyLogic(commands.Cog):
             # --- THIS IS THE CHECK ---
             if response and response.text:
                 cleaned_response = response.text.strip()
+                
+                # 1. Handle actual speech
                 if cleaned_response and cleaned_response.lower() != '[silence]':
-                    for chunk in self.bot.split_message(cleaned_response):
-                        if chunk: await message.channel.send(chunk.lower())
+                    
+                    # --- NEW: Artificial Typing Delay for Autonomous Mode ---
+                    if is_autonomous:
+                        # Calculate read/type speed (0.05s per character), capped at 8 seconds
+                        typing_delay = min(len(cleaned_response) * 0.05, 8.0)
+                        
+                        # Now we explicitly trigger typing because we hid it earlier
+                        async with message.channel.typing():
+                            await asyncio.sleep(typing_delay)
+                            for chunk in self.bot.split_message(cleaned_response):
+                                if chunk: await message.channel.send(chunk.lower())
+                    
+                    # --- Standard Mode (Direct Reply) ---
+                    else:
+                        # We are already inside a typing context from on_message, so just send.
+                        for chunk in self.bot.split_message(cleaned_response):
+                            if chunk: await message.channel.send(chunk.lower())
+
+                # 2. Handle Silence (Optional: Log it so you know he's working)
+                elif cleaned_response.lower() == '[silence]':
+                    logging.info(f"Vinny decided to stay silent for message {message.id}")
 
 # --- USER KNOWLEDGE REQUESTS ---
 
