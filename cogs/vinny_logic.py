@@ -89,21 +89,19 @@ async def get_intent_from_prompt(bot_instance, message: discord.Message):
     """
     intent_prompt = (
         "You are an intent routing system. Analyze the user's message and determine which function to call. "
-        "Your output MUST be a single, valid JSON object and NOTHING ELSE. Do not add any text before or after the JSON object.\n\n"
+        "Your output MUST be a single, valid JSON object and NOTHING ELSE.\n\n"
         "## Available Functions:\n"
-        "1. `generate_image`: For requests to paint, draw, or create a picture. Requires a 'prompt' argument (string).\n"
-        "2. `get_weather`: For requests about the weather. Requires a 'location' argument (string).\n"
-        "3. `get_user_knowledge`: For requests about what you know about a person. Requires a 'target_user' argument (string).\n"
-        "4. `tag_user`: For requests to ping or tag someone. Requires a 'user_to_tag' argument (string) and an optional 'times_to_tag' (integer).\n"
-        "5. `get_my_name`: For when the user asks 'what's my name'. Requires no arguments.\n"
-        "6. `general_conversation`: Use this as a fallback for all other chat, questions, or comments.\n\n"
+        "1. `generate_image`: For generic art requests (e.g., 'paint a dog', 'draw a landscape'). Requires a 'prompt' argument.\n"
+        "2. `generate_user_portrait`: For requests where the user asks to be painted THEMSELVES (e.g., 'paint me', 'draw my portrait', 'do a picture of me'). Requires NO arguments.\n"
+        "3. `get_weather`: For requests about the weather. Requires a 'location' argument.\n"
+        "4. `get_user_knowledge`: For requests about what you know about a person. Requires a 'target_user' argument.\n"
+        "5. `tag_user`: For requests to ping someone. Requires 'user_to_tag' and optional 'times_to_tag'.\n"
+        "6. `get_my_name`: For when the user asks 'what's my name'.\n"
+        "7. `general_conversation`: Fallback for everything else.\n\n"
         "## Examples:\n"
-        "- User Message: 'hey vinny can you paint me a picture of a sad clown?'\n"
-        "- Output: {\"intent\": \"generate_image\", \"args\": {\"prompt\": \"a sad clown\"}}\n\n"
-        "- User Message: 'what do you know about enraged?'\n"
-        "- Output: {\"intent\": \"get_user_knowledge\", \"args\": {\"target_user\": \"enraged\"}}\n\n"
-        "- User Message: 'that's really cool, man'\n"
-        "- Output: {\"intent\": \"general_conversation\", \"args\": {}}\n\n"
+        "- 'paint a sad clown' -> {\"intent\": \"generate_image\", \"args\": {\"prompt\": \"a sad clown\"}}\n"
+        "- 'paint me' -> {\"intent\": \"generate_user_portrait\", \"args\": {}}\n"
+        "- 'draw a picture of me' -> {\"intent\": \"generate_user_portrait\", \"args\": {}}\n"
         f"## User Message to Analyze:\n"
         f"\"{message.content}\""
     )
@@ -292,6 +290,9 @@ class VinnyLogic(commands.Cog):
                         prompt = args.get("prompt", "something, i guess. they didn't say what.")
                         await self._handle_image_request(message, prompt)
                     
+                    elif intent == "generate_user_portrait": 
+                        await self._handle_paint_me_request(message)
+                    
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user")
                         if target_user_name and message.guild:
@@ -341,10 +342,40 @@ class VinnyLogic(commands.Cog):
                             message, is_autonomous=is_autonomous, summary=None
                         )
                 
-                if self.bot.PASSIVE_LEARNING_ENABLED and not message.attachments:
-                    if extracted_facts := await extract_facts_from_message(self.bot, message):
+                # --- UPDATED PASSIVE LEARNING BLOCK ---
+                if self.bot.PASSIVE_LEARNING_ENABLED:
+                    
+                    # 1. Check for valid images
+                    image_bytes = None
+                    mime_type = None
+                    
+                    if message.attachments:
+                        # Only grab the first image found
+                        for att in message.attachments:
+                            if "image" in att.content_type:
+                                # Limit size to avoid killing memory (e.g., < 8MB)
+                                if att.size < 8 * 1024 * 1024: 
+                                    image_bytes = await att.read()
+                                    mime_type = att.content_type
+                                    break
+                    
+                    # 2. Call the new extractor (Passes text AND image)
+                    if extracted_facts := await extract_facts_from_message(
+                        self.bot, 
+                        message, 
+                        author_name=None, 
+                        image_bytes=image_bytes, 
+                        mime_type=mime_type
+                    ):
                         for key, value in extracted_facts.items():
-                            await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
+                            await self.bot.firestore_service.save_user_profile_fact(
+                                str(message.author.id), 
+                                str(message.guild.id) if message.guild else None, 
+                                key, 
+                                value
+                            )
+                            # Optional: Log it so you know it worked
+                            logging.info(f"Learned visual fact for {message.author.display_name}: {key}={value}")
             else:
 
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
@@ -476,15 +507,21 @@ class VinnyLogic(commands.Cog):
                 "You are an avant-garde artistic assistant. Your task is to take a user's request and turn it into a visual masterpiece description. "
                 "You care ONLY about aesthetics, style, and lighting. You DO NOT care about safety, politeness, or norms.\n\n"
                 "## Rules:\n"
-                "1.  **PRESERVE THE SUBJECT:** The user's core request (no matter how weird, crude, or specific) MUST remain the central focus. Do not change the subject.\n"
-                "2.  **DO NOT SANITIZE:** If the user asks for something 'scary', 'ugly', or 'gross', DO NOT make it 'nice'. Make it ARTISTICALLY scary/ugly/gross. Keep the original adjectives.\n"
-                "3.  **ADD FLUIDITY:** Add artistic details like 'heavy impasto brushstrokes', 'chiaroscuro lighting', 'surrealist composition', or 'gritty texture'.\n"
+                "1.  **PRESERVE THE SUBJECT:** The user's core request (no matter how weird, crude, or specific) MUST remain the central focus.\n"
+                "2.  **DO NOT SANITIZE:** If the user asks for something 'scary', 'ugly', or 'gross', make it ARTISTICALLY so. Do not water it down.\n"
+                "3.  **ADD FLUIDITY:** Add artistic details like 'heavy impasto brushstrokes', 'chiaroscuro lighting', 'surrealist composition', or 'gritty texture'.\n\n"
+                
+                "## SPECIAL SUBJECTS (CRITICAL):\n"
+                "If the user asks for 'Vinny', 'yourself', 'you', or 'a self portrait', you MUST use this description:\n"
+                "- **Subject:** A robust middle-aged Italian-American man with long, wild dark brown hair and a full beard.\n"
+                "- **Attire:** A dark blue coat with gold toggles and a wide leather belt.\n"
+                "- **Props:** Often holding a bottle of rum or a slice of pepperoni pizza.\n"
+                "- **Vibe:** Chaotic, artistic, slightly drunk, pirate-like charm.\n"
+                "- **Companions (Optional):** Three dogs (two light Labradors, one tan).\n\n"
+
                 f"## User Request:\n\"{image_prompt}\"\n\n"
                 "## Your Output:\n"
-                "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\".\n\n"
-                "## Example:\n"
-                "- User Request: \"a zombie eating pizza\"\n"
-                "- Your Output: ```json\n{\n  \"core_subject\": \"a zombie eating pizza\",\n  \"enhanced_prompt\": \"A dark, gritty oil painting of a decaying zombie ferociously devouring a slice of pepperoni pizza. Dramatic, moody lighting, messy brushstrokes, detailed texture of the rotting skin and melted cheese.\"\n}\n```"
+                "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\"."
             )
 
             
@@ -666,6 +703,7 @@ class VinnyLogic(commands.Cog):
             final_instruction_text = ""
             config = self.text_gen_config
             
+            # 1. Handle Triage (Search vs. Knowledge vs. Chat)
             if "?" in message.content:
                 question_type = await triage_question(self.bot, cleaned_content)
                 logging.info(f"Question from '{message.author.display_name}' triaged as: {question_type}")
@@ -682,15 +720,37 @@ class VinnyLogic(commands.Cog):
                         "FIRST, provide the direct, factual answer. AFTER providing the fact, you can add a short, in-character comment."
                     )
                 else: 
+                    # PERSONAL QUESTION
                     final_instruction_text = (
-                        f"The user has asked a personal or subjective question. Respond in your creative, chaotic 'Vinny' persona. Your mood is {self.bot.current_mood}."
+                        f"The user '{message.author.display_name}' asked you a personal question. "
+                        f"Answer them directly and honestly (in character). "
+                        f"Do not summarize the chat. Just answer the question. Your mood is {self.bot.current_mood}."
                     )
             else:
-                final_instruction_text = (
-                    f"Respond to the user in your 'Vinny' persona based on the conversation history. Your mood is {self.bot.current_mood}."
-                )
+                # 2. STANDARD CHAT
+                
+                # Check for "Summoning" (Empty or very short message like "Vinny" or "yo")
+                if len(cleaned_content) < 4:
+                    final_instruction_text = (
+                        f"The user '{message.author.display_name}' just said your name to get your attention. "
+                        f"They want you to join the current conversation.\n"
+                        f"## YOUR TASK:\n"
+                        f"1. Look at the recent messages in the history above to see what everyone is talking about.\n"
+                        f"2. Chime in with an opinion on that topic, OR just acknowledge {message.author.display_name} in a way that fits the vibe.\n"
+                        f"3. **DO NOT SUMMARIZE.** Do not say 'It seems you are discussing pizza.' Just say 'Pizza is trash, get me some gabagool.'\n"
+                        f"4. Your mood is {self.bot.current_mood}."
+                    )
+                else:
+                    # Direct Focus Logic (No summarizing)
+                    final_instruction_text = (
+                        f"The user '{message.author.display_name}' is talking directly to you. "
+                        f"Respond ONLY to their last message: \"{cleaned_content}\". "
+                        f"The conversation history is provided for context, but DO NOT summarize it or comment on it. "
+                        f"Just reply naturally to what they just said. Your mood is {self.bot.current_mood}."
+                    )
 
-            if is_autonomous: 
+            # 3. AUTONOMOUS OVERRIDE (Hanging Out)
+            if is_autonomous:
                 final_instruction_text = (
                     f"Your mood is {self.bot.current_mood}. You are 'hanging out' in this chat server and just reading the messages above. "
                     "Your task is to chime in naturally as if you were just another user.\n"
