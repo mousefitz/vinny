@@ -196,15 +196,15 @@ class VinnyLogic(commands.Cog):
 
     # --- EMBED FIXER ---
 
-    async def _check_and_fix_embeds(self, message: discord.Message):
+    async def _check_and_fix_embeds(self, message: discord.Message) -> bool:
         """
-        Scans for broken links, WAITS to see if Discord fixes them automatically,
-        and only provides a manual fix if the embed fails to load.
+        Scans for broken links, fixes them immediately, reposts with credit, 
+        and deletes the original broken message.
         """
         content = message.content
         fixed_url = None
         
-        # --- Identify Potential Fixes ---
+        # --- Identify Potential Fixes (Using the reliable 'kk' domains) ---
         if "instagram.com/" in content and "kkinstagram.com" not in content:
             fixed_url = content.replace("instagram.com", "kkinstagram.com")
         elif "tiktok.com/" in content and "kktiktok.com" not in content:
@@ -217,29 +217,24 @@ class VinnyLogic(commands.Cog):
         elif "music.youtube.com/" in content:
             fixed_url = content.replace("music.youtube.com", "youtube.com")
 
-        # --- The "Smart Check" Logic ---
+        # --- The New "Fix & Replace" Logic ---
         if fixed_url:
-            # 1. Wait 3 seconds for Discord to attempt its own embed
-            await asyncio.sleep(3) 
-
+            # 1. Post the fixed link with credit to the original author
+            await message.channel.send(f"**{message.author.display_name}** posted:\n{fixed_url}")
+            
+            # 2. Delete the user's original message to clean up chat
             try:
-                # 2. Re-fetch the message to get the latest embed data
-                refreshed_message = await message.channel.fetch_message(message.id)
-                
-                # 3. If Discord successfully embedded it, we do NOTHING.
-                if refreshed_message.embeds:
-                    return
-
-                # 4. If no embed exists, Vinny saves the day.
-                await message.channel.send(f"fixed that embed for ya:\n{fixed_url}")
-                try:
-                    await message.edit(suppress=True) # Hide the ugly original link
-                except: pass
-                
+                await message.delete()
+            except discord.Forbidden:
+                logging.warning(f"Could not delete message {message.id} (Missing Permissions).")
             except discord.NotFound:
-                pass # Message was deleted while we were waiting
+                pass # Message already gone
             except Exception as e:
-                logging.error(f"Failed to check/fix embed: {e}")
+                logging.error(f"Error deleting broken embed message: {e}")
+            
+            return True
+            
+        return False
     
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -247,8 +242,8 @@ class VinnyLogic(commands.Cog):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): return
         self.bot.processed_message_ids[message.id] = True
         try:
-            asyncio.create_task(self._check_and_fix_embeds(message))
-
+            if await self._check_and_fix_embeds(message):
+                return
             if await self._is_a_correction(message):
                 return await self._handle_correction(message)
             
