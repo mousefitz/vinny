@@ -54,11 +54,41 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
     async with bot_instance.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
         user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
         user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id) or {}
-        
+# --- NEW MEMORY INJECTION START ---
+        relevant_memories_text = ""
+        if message.guild:
+            # 1. Get keywords from the current message
+            keywords = await get_keywords_for_memory_search(bot_instance, message.content)
+            
+            if keywords:
+                # 2. Search Firestore for past conversation summaries containing these keywords
+                found_memories = await bot_instance.firestore_service.retrieve_relevant_memories(
+                    str(message.guild.id), keywords, limit=2
+                )
+                
+                # 3. Format them for Vinny's brain
+                if found_memories:
+                    memory_strings = []
+                    for mem in found_memories:
+                        # Convert timestamp to readable string if needed
+                        date_str = mem.get("timestamp", "the past")
+                        if hasattr(date_str, "strftime"): date_str = date_str.strftime("%Y-%m-%d")
+                        
+                        memory_strings.append(f"- [{date_str}]: {mem.get('summary')}")
+                    
+                    relevant_memories_text = "\n".join(memory_strings)    
         history = [
-            types.Content(role='user', parts=[types.Part(text=bot_instance.personality_instruction)]),
-            types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")])
+            types.Content(role='user', parts=[types.Part(text=bot_instance.personality_instruction)])
         ]
+
+        # 1. Inject memories if we found them
+        if relevant_memories_text:
+            history.append(types.Content(role='user', parts=[types.Part(text=f"## RECALLED MEMORIES FROM PAST CONVERSATIONS:\n(Use these only if relevant to the current topic)\n{relevant_memories_text}")]))
+
+        # 2. Add Vinny's acknowledgment
+        history.append(types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")]))
+
+        # 3. Append the rest of the chat history
         async for msg in message.channel.history(limit=bot_instance.MAX_CHAT_HISTORY_LENGTH, before=message):
             user_line = f"{msg.author.display_name} (ID: {msg.author.id}): {msg.content}"
             bot_line = f"{msg.author.display_name}: {msg.content}"
