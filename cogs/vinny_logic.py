@@ -118,8 +118,11 @@ class VinnyLogic(commands.Cog):
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user")
                         
-                        # 1. Handle "me" / "myself" explicitly
-                        if not target_user_name or target_user_name.lower() in ["me", "myself", "i", "user"]:
+                        # 1. Handle "me" / "myself" explicitly (Expanded List)
+                        # We strip() the string to remove any accidental whitespace
+                        clean_target = target_user_name.lower().strip() if target_user_name else ""
+                        
+                        if not clean_target or clean_target in ["me", "myself", "i", "user", "the user", "self", "my profile", "my info"]:
                             await conversation_tasks.handle_knowledge_request(self.bot, message, message.author)
                         
                         elif message.guild:
