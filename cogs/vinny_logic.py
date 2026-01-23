@@ -24,9 +24,30 @@ class VinnyLogic(commands.Cog):
         self.bot = bot
         # Safety settings are now in bot.GEMINI_TEXT_CONFIG, but we keep a local reference if needed
         self.memory_scheduler.start()
+        self.status_rotator.start()
 
     def cog_unload(self):
         self.memory_scheduler.cancel()
+        self.status_rotator.cancel()
+
+    @tasks.loop(minutes=15)
+    async def status_rotator(self):
+        """Rotates Vinny's Discord status to add flavor."""
+        await self.bot.wait_until_ready()
+        
+        activities = [
+            discord.Game(name="with a lighter"),
+            discord.Activity(type=discord.ActivityType.watching, name="paint dry"),
+            discord.Activity(type=discord.ActivityType.listening, name="the voices"),
+            discord.Activity(type=discord.ActivityType.competing, name="in a bar fight"),
+            discord.Game(name="don't starve"),
+            discord.Activity(type=discord.ActivityType.watching, name="you"),
+            discord.Activity(type=discord.ActivityType.listening, name="sea shanties"),
+        ]
+        
+        # Pick a random one
+        new_activity = random.choice(activities)
+        await self.bot.change_presence(activity=new_activity, status=discord.Status.online)
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
@@ -96,8 +117,19 @@ class VinnyLogic(commands.Cog):
                     
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user")
-                        if target_user_name and message.guild:
+                        
+                        # 1. Handle "me" / "myself" explicitly
+                        if not target_user_name or target_user_name.lower() in ["me", "myself", "i", "user"]:
+                            await conversation_tasks.handle_knowledge_request(self.bot, message, message.author)
+                        
+                        elif message.guild:
+                            # 2. Try finding by Discord Display Name
                             target_user = discord.utils.find(lambda m: target_user_name.lower() in m.display_name.lower(), message.guild.members)
+                            
+                            # 3. If not found, try finding by Vinny's Internal Nickname (e.g., "Kate")
+                            if not target_user:
+                                target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, target_user_name)
+
                             if target_user:
                                 await conversation_tasks.handle_knowledge_request(self.bot, message, target_user)
                             else:
@@ -234,6 +266,7 @@ class VinnyLogic(commands.Cog):
     async def help_command(self, ctx):
         embed = discord.Embed(title="What do ya want?", description="Heh. Aight, so you need help? Pathetic. Here's the stuff I can do if ya use the '!' thing. Don't get used to it.", color=discord.Color.dark_gold())
         embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
+        embed.add_field(name="!vibe", value="Checks my current mood and tells you exactly what I think of you.", inline=False)
         embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
         embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
         embed.add_field(name="!horoscope [sign]", value="I'll look at the sky and tell ya what's up. It's probably chaos.\n*Example: `!horoscope gemini`*", inline=False)
@@ -470,6 +503,49 @@ class VinnyLogic(commands.Cog):
         path = constants.get_summaries_collection_path(self.bot.APP_ID, str(ctx.guild.id))
         if await self.bot.firestore_service.delete_docs(path): await ctx.send("aight, it's done. all the old chatter is gone.")
         else: await ctx.send("couldn't clear the memories. maybe they're stuck.")
+
+    @commands.command(name='vibe')
+    async def vibe_command(self, ctx):
+        """Checks Vinny's current mood and his opinion of you."""
+        user_id = str(ctx.author.id)
+        guild_id = str(ctx.guild.id) if ctx.guild else None
+        
+        # 1. Get Relationship Data
+        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+        rel_status = profile.get("relationship_status", "neutral")
+        rel_score = profile.get("relationship_score", 0)
+        
+        # 2. Get Current Mood
+        mood = self.bot.current_mood
+        
+        # 3. Generate Vinny's Comment
+        prompt = (
+            f"{self.bot.personality_instruction}\n\n"
+            f"# TASK:\n"
+            f"The user '{ctx.author.display_name}' just asked for a 'vibe check'.\n"
+            f"- Your Current Mood: {mood}\n"
+            f"- Your Opinion of Them: {rel_status} (Score: {rel_score:.1f})\n\n"
+            f"Write a short, one-sentence response telling them exactly where they stand with you based on these stats."
+        )
+        
+        async with ctx.typing():
+            try:
+                response = await self.bot.make_tracked_api_call(
+                    model=self.bot.MODEL_NAME, 
+                    contents=[prompt], 
+                    config=self.bot.GEMINI_TEXT_CONFIG
+                )
+                comment = response.text.strip() if response else "i don't even know what i'm feelin right now."
+            except:
+                comment = "my brain's fried."
+
+        # 4. Send Embed
+        embed = discord.Embed(color=discord.Color.dark_magenta())
+        embed.add_field(name="🧠 Current Mood", value=mood.title(), inline=True)
+        embed.add_field(name="❤️ Relationship", value=f"{rel_status.title()} ({rel_score:.0f})", inline=True)
+        embed.add_field(name="💬 Vinny says:", value=comment, inline=False)
+        
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))

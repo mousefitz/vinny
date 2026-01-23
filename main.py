@@ -89,7 +89,7 @@ class VinnyBot(commands.Bot):
         self.MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
-        self.MAX_CHAT_HISTORY_LENGTH = 15
+        self.MAX_CHAT_HISTORY_LENGTH = 50
         
         # --- Harm Categories ---
         safety_settings_list = [
@@ -170,7 +170,9 @@ class VinnyBot(commands.Bot):
             await self.initialize_rate_limiter()
 
         logging.info("Loading cogs...")
-        await self.load_extension("cogs.vinny_logic")
+        # REMOVED: await self.load_extension("cogs.vinny_logic")
+        await self.load_extension("cogs.commands")      # New Commands file
+        await self.load_extension("cogs.chat_listener") # New Logic file
         logging.info("Cogs loaded successfully.")
 
     async def on_ready(self):

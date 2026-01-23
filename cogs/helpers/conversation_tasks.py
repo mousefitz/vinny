@@ -386,3 +386,10 @@ async def update_relationship_status(bot_instance, user_id: str, guild_id: str |
     if current_status != new_status:
         await bot_instance.firestore_service.save_user_profile_fact(user_id, guild_id, "relationship_status", new_status)
         logging.info(f"Relationship status for user {user_id} changed from '{current_status}' to '{new_status}' (Score: {new_score:.2f})")
+
+async def get_keywords_for_memory_search(bot_instance, text: str):
+    """Extracts search keywords from a user message."""
+    ignore_words = {"the", "and", "is", "it", "to", "in", "of", "that", "this", "for", "with", "you", "me", "vinny"}
+    words = re.findall(r'\w+', text.lower())
+    keywords = [w for w in words if w not in ignore_words and len(w) > 3]
+    return keywords[:3]
