@@ -116,29 +116,37 @@ class VinnyLogic(commands.Cog):
                         await image_tasks.handle_paint_me_request(self.bot, message)
                     
                     elif intent == "get_user_knowledge":
-                        target_user_name = args.get("target_user")
-                        
-                        # 1. Handle "me" / "myself" explicitly (Expanded List)
-                        # We strip() the string to remove any accidental whitespace
-                        clean_target = target_user_name.lower().strip() if target_user_name else ""
-                        
-                        if not clean_target or clean_target in ["me", "myself", "i", "user", "the user", "self", "my profile", "my info"]:
-                            await conversation_tasks.handle_knowledge_request(self.bot, message, message.author)
-                        
-                        elif message.guild:
-                            # 2. Try finding by Discord Display Name
-                            target_user = discord.utils.find(lambda m: target_user_name.lower() in m.display_name.lower(), message.guild.members)
-                            
-                            # 3. If not found, try finding by Vinny's Internal Nickname (e.g., "Kate")
-                            if not target_user:
-                                target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, target_user_name)
+                        target_user_name = args.get("target_user", "")
+                        target_user = None
 
-                            if target_user:
-                                await conversation_tasks.handle_knowledge_request(self.bot, message, target_user)
-                            else:
-                                await message.channel.send(f"who? i looked all over, couldn't find anyone named '{target_user_name}'.")
+                        # 0. PRIORITY: Check for actual Discord Mentions first
+                        # We filter out the bot itself (Vinny) from the mentions list
+                        valid_mentions = [m for m in message.mentions if m.id != self.bot.user.id]
+                        if valid_mentions:
+                            target_user = valid_mentions[0]
+
+                        # 1. If no mention, check for "me" / "myself" keywords
+                        clean_target = target_user_name.lower().strip()
+                        if not target_user and (not clean_target or clean_target in ["me", "myself", "i", "user", "the user", "self", "my profile"]):
+                            target_user = message.author
+
+                        # 2. If still no user, try searching by name (Text Search)
+                        elif not target_user and message.guild:
+                            # Sanitize: Remove '@' and extra spaces so search works
+                            search_name = target_user_name.replace("@", "").strip()
+                            
+                            # A. Try finding by Discord Display Name
+                            target_user = discord.utils.find(lambda m: search_name.lower() in m.display_name.lower(), message.guild.members)
+                            
+                            # B. If not found, try finding by Vinny's Internal Nickname
+                            if not target_user:
+                                target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, search_name)
+
+                        # --- EXECUTE REQUEST ---
+                        if target_user:
+                            await conversation_tasks.handle_knowledge_request(self.bot, message, target_user)
                         else:
-                            await conversation_tasks.handle_knowledge_request(self.bot, message, message.author)
+                            await message.channel.send(f"who? i looked all over, couldn't find anyone named '{target_user_name}'.")
 
                     elif intent == "tag_user":
                         user_to_tag = args.get("user_to_tag")
