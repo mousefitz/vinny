@@ -138,7 +138,23 @@ class FirestoreService:
         except Exception:
             logging.error(f"Failed to delete fact '{fact_key}' for user '{user_id}'", exc_info=True)
             return False
-
+    
+    async def get_all_user_ids_in_guild(self, guild_id: str):
+        """Retrieves a list of all user IDs that have a profile in this guild."""
+        if not self.db: return []
+        
+        try:
+            
+            users_ref = self.db.collection('guilds').document(str(guild_id)).collection('users')
+            
+            
+            docs = users_ref.stream()
+            
+            return [doc.id for doc in docs]
+        except Exception as e:
+            logging.error(f"Failed to fetch all users for guild {guild_id}: {e}")
+            return []
+        
     # --- Relationship Score Management ---
 
     async def update_relationship_score(self, user_id: str, guild_id: str, sentiment_score: int):

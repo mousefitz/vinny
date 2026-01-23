@@ -161,11 +161,17 @@ class VinnyLogic(commands.Cog):
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
                     else: 
-                        # Background sentiment update
                         async def update_sentiment_background():
                             try:
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
-                                sentiment_score_map = { "positive": 2, "flirty": 3, "negative": -2, "angry": -5, "sarcastic": -1, "neutral": 0.5 }
+                                sentiment_score_map = { 
+                                    "positive": 2, 
+                                    "flirty": 4,        
+                                    "neutral": 1,       
+                                    "sarcastic": 1,     
+                                    "negative": -1,     
+                                    "angry": -3         
+                                }
                                 score_change = sentiment_score_map.get(user_sentiment, 0)
                                 
                                 if message.guild:
@@ -289,6 +295,7 @@ class VinnyLogic(commands.Cog):
         if await self.bot.is_owner(ctx.author):
             embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
             embed.add_field(name="!set_relationship [@user] [type]", value="**(Owner Only)** Sets my feelings about someone. Types are: `friends`, `rivals`, `distrusted`, `admired`, `annoyance`, `neutral`.", inline=False)
+            embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral). Use this if I hate everyone.", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
         embed.set_footer(text="Now stop botherin' me. Salute!")
         await ctx.send(embed=embed)
@@ -514,6 +521,31 @@ class VinnyLogic(commands.Cog):
         path = constants.get_summaries_collection_path(self.bot.APP_ID, str(ctx.guild.id))
         if await self.bot.firestore_service.delete_docs(path): await ctx.send("aight, it's done. all the old chatter is gone.")
         else: await ctx.send("couldn't clear the memories. maybe they're stuck.")
+
+    @commands.command(name='forgive_all')
+    @commands.is_owner()
+    async def forgive_all_command(self, ctx):
+        """Resets the relationship score of EVERY user in the server to 0."""
+        if not ctx.guild: return await ctx.send("Server only, pal.")
+        
+        await ctx.send("Aight, hold on. I'm wiping the slate clean...")
+        async with ctx.typing():
+            # 1. Get all user IDs
+            user_ids = await self.bot.firestore_service.get_all_user_ids_in_guild(str(ctx.guild.id))
+            
+            if not user_ids:
+                return await ctx.send("I don't know anyone here yet. Job done.")
+
+            count = 0
+            # 2. Reset them one by one
+            for user_id in user_ids:
+                # Reset score to 0
+                await self.bot.firestore_service.save_user_profile_fact(user_id, str(ctx.guild.id), "relationship_score", 0)
+                # Reset status to 'neutral'
+                await self.bot.firestore_service.save_user_profile_fact(user_id, str(ctx.guild.id), "relationship_status", "neutral")
+                count += 1
+                
+        await ctx.send(f"Done. I forgave {count} people. You're all 'neutral' to me now. Don't make me regret it.")
 
     @commands.command(name='vibe')
     async def vibe_command(self, ctx):
