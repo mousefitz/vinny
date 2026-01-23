@@ -294,7 +294,7 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="!vinnycalls [@user] [name]", value="Gives someone a nickname that I'll remember.\n*Example: `!vinnycalls @SomeUser Cori`*", inline=False)
         if await self.bot.is_owner(ctx.author):
             embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
-            embed.add_field(name="!set_relationship [@user] [type]", value="**(Owner Only)** Sets my feelings about someone. Types are: `friends`, `rivals`, `distrusted`, `admired`, `annoyance`, `neutral`.", inline=False)
+            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets my numeric relationship score for a user. (e.g. 100, -50, 0). Status updates automatically.", inline=False)
             embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral). Use this if I hate everyone.", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
         embed.set_footer(text="Now stop botherin' me. Salute!")
@@ -505,14 +505,27 @@ class VinnyLogic(commands.Cog):
 
     @commands.command(name='set_relationship')
     @commands.is_owner()
-    async def set_relationship_command(self, ctx, member: discord.Member, rel_type: str):
-        valid_types = ['friends', 'rivals', 'distrusted', 'admired', 'annoyance', 'neutral']
-        if rel_type.lower() in valid_types:
-            guild_id = str(ctx.guild.id) if ctx.guild else None
-            if await self.bot.firestore_service.save_user_profile_fact(str(member.id), guild_id, 'relationship_status', rel_type.lower()):
-                await ctx.send(f"aight, got it. me and {member.display_name} are... '{rel_type.lower()}'.")
+    async def set_relationship_command(self, ctx, member: discord.Member, score: float):
+        """Sets a user's relationship score directly (Number). Status updates automatically."""
+        guild_id = str(ctx.guild.id) if ctx.guild else None
+        user_id = str(member.id)
+        
+        # 1. Update the score in the database
+        if await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, 'relationship_score', score):
+            # 2. Force the status to update based on this new score
+            await conversation_tasks.update_relationship_status(self.bot, user_id, guild_id, score)
+            
+            # 3. Determine status just for the confirmation message
+            thresholds = { "admired": 100, "friends": 50, "distrusted": -50, "annoyance": -100 }
+            status = "neutral"
+            if score >= thresholds["admired"]: status = "admired"
+            elif score >= thresholds["friends"]: status = "friends"
+            elif score <= thresholds["annoyance"]: status = "annoyance"
+            elif score <= thresholds["distrusted"]: status = "distrusted"
+            
+            await ctx.send(f"aight. set {member.mention}'s score to **{score}**. they are now considered **'{status}'**.")
         else:
-            await ctx.send(f"that ain't a real relationship type. try: {', '.join(valid_types)}")
+            await ctx.send("failed to save the score. my brain's broken.")
 
     @commands.command(name='clear_memories')
     @commands.is_owner()
