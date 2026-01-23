@@ -170,9 +170,7 @@ class VinnyBot(commands.Bot):
             await self.initialize_rate_limiter()
 
         logging.info("Loading cogs...")
-        # REMOVED: await self.load_extension("cogs.vinny_logic")
-        await self.load_extension("cogs.commands")      # New Commands file
-        await self.load_extension("cogs.chat_listener") # New Logic file
+        await self.load_extension("cogs.vinny_logic")
         logging.info("Cogs loaded successfully.")
 
     async def on_ready(self):
