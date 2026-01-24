@@ -91,12 +91,17 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             enhanced_prompt = data.get("enhanced_prompt", image_prompt)
             core_subject = data.get("core_subject", "something weird")
             
-            # 3. Announce the "Thinking" Phase
+            # 3. Announce the "Thinking" Phase (Updated: Generic & Silly)
             thinking_messages = [
-                f"aight, painting **{core_subject}**... gimme a sec.",
-                f"oh i got a vision for **{core_subject}**. hold on.",
-                f"mixing the paints for **{core_subject}**...",
-                f"**{core_subject}**? bold choice. let's see what i can do."
+                "aight, gimme a sec. i gotta find my brushes.",
+                "oh i got a vision. hold on.",
+                "mixing the paints... don't rush me.",
+                "lemme see what i can do. stand back.",
+                "hold on, let me finish this slice of pizza first.",
+                "patience. art takes time, unlike your attention span.",
+                "i'm on it. this is gonna be messy.",
+                "loading the canvas... aka grabbing a napkin.",
+                "got it. preparing the masterpiece."
             ]
             await message.channel.send(random.choice(thinking_messages))
 
