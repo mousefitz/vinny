@@ -9,6 +9,7 @@ import contextlib
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 from google.genai import types
+from cachetools import TTLCache
 
 from utils import constants, api_clients
 from utils.fact_extractor import extract_facts_from_message
@@ -25,7 +26,8 @@ class VinnyLogic(commands.Cog):
         # Safety settings are now in bot.GEMINI_TEXT_CONFIG, but we keep a local reference if needed
         self.memory_scheduler.start()
         self.status_rotator.start()
-
+        self.channel_image_history = TTLCache(maxsize=100, ttl=600)
+        
     def cog_unload(self):
         self.memory_scheduler.cancel()
         self.status_rotator.cancel()
@@ -110,7 +112,18 @@ class VinnyLogic(commands.Cog):
                 async with typing_ctx:
                     if intent == "generate_image":
                         prompt = args.get("prompt", "something, i guess. they didn't say what.")
-                        await image_tasks.handle_image_request(self.bot, message, prompt)
+                        
+                        # 1. Retrieve the previous prompt for this channel
+                        previous_prompt = self.channel_image_history.get(message.channel.id)
+                        
+                        # 2. Call the image task (now returns the NEW prompt used)
+                        final_prompt = await image_tasks.handle_image_request(
+                            self.bot, message, prompt, previous_prompt
+                        )
+                        
+                        # 3. Save the new prompt to history
+                        if final_prompt:
+                            self.channel_image_history[message.channel.id] = final_prompt
                     
                     elif intent == "generate_user_portrait": 
                         await image_tasks.handle_paint_me_request(self.bot, message)
@@ -283,7 +296,7 @@ class VinnyLogic(commands.Cog):
     async def help_command(self, ctx):
         embed = discord.Embed(title="What do ya want?", description="Heh. Aight, so you need help? Pathetic. Here's the stuff I can do if ya use the '!' thing. Don't get used to it.", color=discord.Color.dark_gold())
         embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
-        embed.add_field(name="!vibe", value="Checks my current mood and tells you exactly what I think of you.", inline=False)
+        embed.add_field(name="!vibe [@user]", value="Checks what I think of you (or someone else if you tag 'em).", inline=False)
         embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
         embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
         embed.add_field(name="!horoscope [sign]", value="I'll look at the sky and tell ya what's up. It's probably chaos.\n*Example: `!horoscope gemini`*", inline=False)
@@ -294,7 +307,7 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="!vinnycalls [@user] [name]", value="Gives someone a nickname that I'll remember.\n*Example: `!vinnycalls @SomeUser Cori`*", inline=False)
         if await self.bot.is_owner(ctx.author):
             embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
-            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets my numeric relationship score for a user. (e.g. 100, -50, 0). Status updates automatically.", inline=False)
+            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets the numeric relationship score (-100 to 100).\n*Tiers: Nemesis, Enemy, Sketchy, Annoyance, Neutral, Chill, Friend, Bestie, Worshipped*", inline=False)
             embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral). Use this if I hate everyone.", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
         embed.set_footer(text="Now stop botherin' me. Salute!")
@@ -506,24 +519,20 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='set_relationship')
     @commands.is_owner()
     async def set_relationship_command(self, ctx, member: discord.Member, score: float):
-        """Sets a user's relationship score directly (Number). Status updates automatically."""
+        """Sets a user's relationship score directly. Status updates automatically."""
         guild_id = str(ctx.guild.id) if ctx.guild else None
         user_id = str(member.id)
         
-        # 1. Update the score in the database
+        # 1. Update the score
         if await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, 'relationship_score', score):
-            # 2. Force the status to update based on this new score
+            # 2. Force status update
             await conversation_tasks.update_relationship_status(self.bot, user_id, guild_id, score)
             
-            # 3. Determine status just for the confirmation message
-            thresholds = { "admired": 100, "friends": 50, "distrusted": -50, "annoyance": -100 }
-            status = "neutral"
-            if score >= thresholds["admired"]: status = "admired"
-            elif score >= thresholds["friends"]: status = "friends"
-            elif score <= thresholds["annoyance"]: status = "annoyance"
-            elif score <= thresholds["distrusted"]: status = "distrusted"
+            # 3. Retrieve the new status to confirm to the user
+            updated_profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+            new_status = updated_profile.get("relationship_status", "unknown")
             
-            await ctx.send(f"aight. set {member.mention}'s score to **{score}**. they are now considered **'{status}'**.")
+            await ctx.send(f"aight. set {member.mention}'s score to **{score}**. they are now considered **'{new_status}'**.")
         else:
             await ctx.send("failed to save the score. my brain's broken.")
 
@@ -561,13 +570,26 @@ class VinnyLogic(commands.Cog):
         await ctx.send(f"Done. I forgave {count} people. You're all 'neutral' to me now. Don't make me regret it.")
 
     @commands.command(name='vibe')
-    async def vibe_command(self, ctx):
-        """Checks Vinny's current mood and his opinion of you."""
-        user_id = str(ctx.author.id)
+    async def vibe_command(self, ctx, member: discord.Member = None):
+        """
+        Checks Vinny's opinion of you, or another user if specified.
+        Usage: !vibe OR !vibe @User
+        """
+        # If no user is specified, default to the author (you)
+        target_user = member or ctx.author
+        
+        user_id = str(target_user.id)
         guild_id = str(ctx.guild.id) if ctx.guild else None
         
-        # 1. Get Relationship Data
+# 1. Get Relationship Data
         profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+        if not profile:
+            # Handle case where Vinny doesn't know them at all
+            if target_user == ctx.author:
+                return await ctx.send("i don't even know who you are yet.")
+            else:
+                return await ctx.send(f"i don't know who {target_user.display_name} is. never met 'em.")
+
         rel_status = profile.get("relationship_status", "neutral")
         rel_score = profile.get("relationship_score", 0)
         
@@ -594,6 +616,20 @@ class VinnyLogic(commands.Cog):
                 comment = response.text.strip() if response else "i don't even know what i'm feelin right now."
             except:
                 comment = "my brain's fried."
+
+# Optional: Dynamic Color based on Status
+        color_map = {
+            "worshipped": discord.Color.gold(),
+            "bestie":     discord.Color.purple(),
+            "friend":     discord.Color.green(),
+            "chill":      discord.Color.teal(),
+            "neutral":    discord.Color.dark_magenta(), # Your default
+            "annoyance":  discord.Color.orange(),
+            "sketchy":    discord.Color.dark_orange(),
+            "enemy":      discord.Color.red(),
+            "nemesis":    discord.Color.dark_red()
+        }
+        embed_color = color_map.get(rel_status, discord.Color.dark_magenta())
 
         # 4. Send Embed
         embed = discord.Embed(color=discord.Color.dark_magenta())

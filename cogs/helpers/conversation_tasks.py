@@ -52,43 +52,44 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
 async def handle_text_or_image_response(bot_instance, message: discord.Message, is_autonomous: bool = False, summary: str = ""):
     """Core logic for generating a text response based on chat history."""
     async with bot_instance.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
-        user_id, guild_id = str(message.author.id), str(message.guild.id) if message.guild else None
+        user_id = str(message.author.id)
+        guild_id = str(message.guild.id) if message.guild else None
+        
+        # --- 1. FETCH USER DATA (Profile & Nickname) ---
         user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id) or {}
-# --- NEW MEMORY INJECTION START ---
+        
+        # Check for a custom Vinny nickname
+        custom_nickname = await bot_instance.firestore_service.get_user_nickname(user_id)
+        # If a nickname exists, use it. Otherwise, use their Discord display name.
+        actual_display_name = custom_nickname if custom_nickname else message.author.display_name
+
+        # --- MEMORY INJECTION START ---
         relevant_memories_text = ""
         if message.guild:
-            # 1. Get keywords from the current message
             keywords = await get_keywords_for_memory_search(bot_instance, message.content)
-            
             if keywords:
-                # 2. Search Firestore for past conversation summaries containing these keywords
                 found_memories = await bot_instance.firestore_service.retrieve_relevant_memories(
                     str(message.guild.id), keywords, limit=2
                 )
-                
-                # 3. Format them for Vinny's brain
                 if found_memories:
                     memory_strings = []
                     for mem in found_memories:
-                        # Convert timestamp to readable string if needed
                         date_str = mem.get("timestamp", "the past")
                         if hasattr(date_str, "strftime"): date_str = date_str.strftime("%Y-%m-%d")
-                        
                         memory_strings.append(f"- [{date_str}]: {mem.get('summary')}")
-                    
-                    relevant_memories_text = "\n".join(memory_strings)    
+                    relevant_memories_text = "\n".join(memory_strings)
+        # ----------------------------------
+
+        # --- HISTORY CONSTRUCTION ---
         history = [
             types.Content(role='user', parts=[types.Part(text=bot_instance.personality_instruction)])
         ]
 
-        # 1. Inject memories if we found them
         if relevant_memories_text:
             history.append(types.Content(role='user', parts=[types.Part(text=f"## RECALLED MEMORIES FROM PAST CONVERSATIONS:\n(Use these only if relevant to the current topic)\n{relevant_memories_text}")]))
 
-        # 2. Add Vinny's acknowledgment
         history.append(types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")]))
 
-        # 3. Append the rest of the chat history
         async for msg in message.channel.history(limit=bot_instance.MAX_CHAT_HISTORY_LENGTH, before=message):
             user_line = f"{msg.author.display_name} (ID: {msg.author.id}): {msg.content}"
             bot_line = f"{msg.author.display_name}: {msg.content}"
@@ -100,11 +101,10 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
         final_instruction_text = ""
         config = bot_instance.GEMINI_TEXT_CONFIG
         
-        # 1. Handle Triage (Search vs. Knowledge vs. Chat)
+        # 1. Handle Triage
         if "?" in message.content:
             question_type = await ai_classifiers.triage_question(bot_instance, cleaned_content)
-            logging.info(f"Question from '{message.author.display_name}' triaged as: {question_type}")
-
+            
             if question_type == "real_time_search":
                 config = types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())])
                 final_instruction_text = (
@@ -118,25 +118,25 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                 )
             else: 
                 final_instruction_text = (
-                    f"The user '{message.author.display_name}' asked you a personal question. "
+                    f"The user '{actual_display_name}' asked you a personal question. "
                     f"Answer them directly and honestly (in character). "
                     f"Do not summarize the chat. Just answer the question. Your mood is {bot_instance.current_mood}."
                 )
         else:
             # 2. STANDARD CHAT
-            if len(cleaned_content) < 4:
+            if len(cleaned_content) < 4 and not message.attachments:
                 final_instruction_text = (
-                    f"The user '{message.author.display_name}' just said your name to get your attention. "
+                    f"The user '{actual_display_name}' just said your name to get your attention. "
                     f"They want you to join the current conversation.\n"
                     f"## YOUR TASK:\n"
                     f"1. Look at the recent messages in the history above to see what everyone is talking about.\n"
-                    f"2. Chime in with an opinion on that topic, OR just acknowledge {message.author.display_name} in a way that fits the vibe.\n"
+                    f"2. Chime in with an opinion on that topic, OR just acknowledge {actual_display_name} in a way that fits the vibe.\n"
                     f"3. **DO NOT SUMMARIZE.** Do not say 'It seems you are discussing pizza.' Just say 'Pizza is trash, get me some gabagool.'\n"
                     f"4. Your mood is {bot_instance.current_mood}."
                 )
             else:
                 final_instruction_text = (
-                    f"The user '{message.author.display_name}' is talking directly to you. "
+                    f"The user '{actual_display_name}' is talking directly to you. "
                     f"Respond ONLY to their last message: \"{cleaned_content}\". "
                     f"The conversation history is provided for context, but DO NOT summarize it or comment on it. "
                     f"Just reply naturally to what they just said. Your mood is {bot_instance.current_mood}."
@@ -156,7 +156,7 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
         async for msg in message.channel.history(limit=bot_instance.MAX_CHAT_HISTORY_LENGTH, before=message):
             if not msg.author.bot:
                 participants.add(msg.author.display_name)
-        participants.add(message.author.display_name)
+        participants.add(actual_display_name) # Ensure nickname is in participant list
         participant_list = ", ".join(sorted(list(participants)))
 
         attribution_instruction = (
@@ -168,18 +168,68 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
 
         history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text)]))
         
-        final_user_message_text = f"{message.author.display_name} (ID: {message.author.id}): {cleaned_content}"
+        # --- HERE IS THE FIX: We use 'actual_display_name' (the nickname) in the prompt ---
+        final_user_message_text = f"{actual_display_name} (ID: {message.author.id}): {cleaned_content}"
         prompt_parts = [types.Part(text=final_user_message_text)]
         
+        uploaded_media_file = None 
+
         if message.attachments:
             for attachment in message.attachments:
+                # --- IMAGE LOGIC (Lightweight) ---
                 if "image" in attachment.content_type:
                     image_bytes = await attachment.read()
                     prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
+                    break 
+                
+                # --- VIDEO & AUDIO LOGIC (Heavyweight) ---
+                elif "video" in attachment.content_type or "audio" in attachment.content_type:
+                    async with message.channel.typing():
+                        # 1. Download media to a temp file
+                        temp_filename = f"temp_{message.id}_{attachment.filename}"
+                        await attachment.save(temp_filename)
+                        
+                        try:
+                            # 2. Upload to Gemini
+                            uploaded_media_file = await asyncio.to_thread(
+                                bot_instance.gemini_client.files.upload, 
+                                path=temp_filename
+                            )
+                            
+                            # 3. Wait for processing
+                            while uploaded_media_file.state.name == "PROCESSING":
+                                await asyncio.sleep(1)
+                                uploaded_media_file = await asyncio.to_thread(
+                                    bot_instance.gemini_client.files.get, 
+                                    name=uploaded_media_file.name
+                                )
+                            
+                            if uploaded_media_file.state.name == "FAILED":
+                                raise Exception("Media processing failed.")
+
+                            # 4. Attach
+                            prompt_parts.append(types.Part(file_data=types.FileData(file_uri=uploaded_media_file.uri, mime_type=uploaded_media_file.mime_type)))
+                            
+                        except Exception as e:
+                            logging.error(f"Failed to process media: {e}")
+                            await message.channel.send("i tried to listen/watch that but my brain shorted out. bad file.")
+                        
+                        finally:
+                            # 5. Clean up local temp file
+                            import os
+                            if os.path.exists(temp_filename):
+                                os.remove(temp_filename)
                     break
+
         history.append(types.Content(role='user', parts=prompt_parts))
 
         response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=history, config=config)
+
+        if uploaded_media_file:
+            try:
+                await asyncio.to_thread(bot_instance.gemini_client.files.delete, name=uploaded_media_file.name)
+            except Exception:
+                pass 
 
         if response and response.text:
             cleaned_response = response.text.strip()
@@ -402,17 +452,35 @@ async def generate_memory_summary(bot_instance, messages):
 
 async def update_relationship_status(bot_instance, user_id: str, guild_id: str | None, new_score: float):
     """Determines a user's relationship status based on their score."""
+    # New Granular Thresholds (Checked from top down)
     thresholds = {
-        "admired": 100, "friends": 50, "distrusted": -50, "annoyance": -100,
+        "worshipped": 90,
+        "bestie": 60,
+        "friend": 25,
+        "chill": 10,
+        "neutral": -10,      # Anything between -10 and 10 falls here implicitly
+        "annoyance": -25,    # -11 to -25
+        "sketchy": -59,      # -26 to -59
+        "enemy": -89,        # -60 to -89
+        "nemesis": -100      # -90 and below
     }
+
     new_status = "neutral"
-    if new_score >= thresholds["admired"]: new_status = "admired"
-    elif new_score >= thresholds["friends"]: new_status = "friends"
-    elif new_score <= thresholds["annoyance"]: new_status = "annoyance"
-    elif new_score <= thresholds["distrusted"]: new_status = "distrusted"
+    
+    # Logic: Check highest positive first, then work down to negatives
+    if new_score >= thresholds["worshipped"]: new_status = "worshipped"
+    elif new_score >= thresholds["bestie"]: new_status = "bestie"
+    elif new_score >= thresholds["friend"]: new_status = "friend"
+    elif new_score >= thresholds["chill"]: new_status = "chill"
+    elif new_score >= thresholds["neutral"]: new_status = "neutral" # -10 to 9
+    elif new_score > thresholds["sketchy"]: new_status = "annoyance" # -11 to -25
+    elif new_score > thresholds["enemy"]: new_status = "sketchy"     # -26 to -59
+    elif new_score > thresholds["nemesis"]: new_status = "enemy"     # -60 to -89
+    else: new_status = "nemesis"                                     # -90 or lower
         
     current_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
     current_status = current_profile.get("relationship_status", "neutral")
+    
     if current_status != new_status:
         await bot_instance.firestore_service.save_user_profile_fact(user_id, guild_id, "relationship_status", new_status)
         logging.info(f"Relationship status for user {user_id} changed from '{current_status}' to '{new_status}' (Score: {new_score:.2f})")

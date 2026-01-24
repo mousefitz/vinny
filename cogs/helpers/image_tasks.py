@@ -2,6 +2,8 @@ import re
 import json
 import logging
 import discord
+import random
+import os
 from google.genai import types
 from utils import api_clients
 
@@ -36,82 +38,101 @@ async def handle_paint_me_request(bot_instance, message: discord.Message):
         
     await handle_image_request(bot_instance, message, prompt_text)
 
-async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str):
-    """Rewrites the prompt, calls Imagen, and sends the result."""
+async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
+    """
+    Generates an image using Gemini to rewrite the prompt and Imagen 3 to paint it.
+    Returns the FINAL enhanced prompt used, so it can be saved to history.
+    """
     async with message.channel.typing():
-        thinking_message = "aight, lemme get my brushes..."
-        try:
-            thinking_prompt = (f"You are Vinny, an eccentric artist. A user just asked you to paint '{image_prompt}'. Generate a very short, in-character phrase (in lowercase with typos) that you would say as you're about to start painting. Do not repeat the user's prompt. Examples: 'another masterpiece comin right up...', 'hmmm this one's gonna take some inspiration... and rum', 'aight aight i hear ya...'")
-            response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=[thinking_prompt], config=bot_instance.GEMINI_TEXT_CONFIG)
-            if response and response.text: 
-                thinking_message = response.text.strip()
-        except Exception as e: 
-            logging.warning(f"Failed to generate dynamic thinking message: {e}")
-            
-        await message.channel.send(thinking_message)
-     
-        prompt_rewriter_instruction = (
-                "You are a passionate, expressive artistic assistant. Your task is to turn a user's request into a visually striking image prompt.\n\n"
-                "## Rules:\n"
-                "1.  **MATCH THE VIBE (CRITICAL):** \n"
-                "    - If the user wants something **cute/happy**, use bright lighting, soft textures, and vibrant colors.\n"
-                "    - If the user wants something **scary/dark**, use heavy shadows, grit, and unsettling atmosphere.\n"
-                "2.  **DO NOT SANITIZE HORROR:** If the user specifically asks for monsters, zombies, or creepy things, DO NOT water it down. Make it genuinely scary. Just do not apply this style to innocent requests.\n"
-                "3.  **ENHANCE:** Add artistic details (e.g., 'cinematic lighting', 'oil painting texture') that fit the requested mood.\n\n"
-                
-                "## SPECIAL SUBJECTS:\n"
-                "If the user asks for 'Vinny', 'yourself', 'you', or 'a self portrait', you MUST use this description:\n"
-                "- **Subject:** A robust middle-aged Italian-American man with long, wild dark brown hair and a full beard.\n"
-                "- **Attire:** A dark blue coat with gold toggles and a wide leather belt.\n"
-                "- **Props:** Often holding a bottle of rum or a slice of pepperoni pizza.\n"
-                "- **Vibe:** Chaotic, artistic, slightly drunk, pirate-like charm.\n"
-                "- **Companions (Optional):** Three dogs (two light Labradors, one tan).\n\n"
-
-                f"## User Request:\n\"{image_prompt}\"\n\n"
-                "## Your Output:\n"
-                "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\"."
+        # 1. Rewriter Instruction (Now with Context Awareness)
+        context_instruction = ""
+        if previous_prompt:
+            context_instruction = (
+                f"\n## CONTEXT (PREVIOUS PAINTING):\n"
+                f"The last thing you painted for this user was: \"{previous_prompt}\".\n"
+                f"**CRITICAL DECISION:**\n"
+                f"- IF the User Request implies an edit (e.g., 'add a hat', 'make it night', 'remove the dog'), MERGE the previous prompt with the new request to create a complete updated scene.\n"
+                f"- IF the User Request is a completely new idea (e.g., 'draw a car'), IGNORE the previous painting.\n"
             )
 
-        smarter_prompt = image_prompt
-        try:
-            response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=[prompt_rewriter_instruction], config=bot_instance.GEMINI_TEXT_CONFIG)
-            if response:
-                json_match = re.search(r'```json\s*(\{.*?\})\s*```|(\{.*?\})', response.text, re.DOTALL)
-                if json_match:
-                    json_string = json_match.group(1) or json_match.group(2)
-                    data = json.loads(json_string)
-                    smarter_prompt = data.get("enhanced_prompt", image_prompt)
-                    logging.info(f"Rewrote prompt. Core subject: '{data.get('core_subject')}'")
-                else:
-                    logging.warning(f"Could not find JSON in prompt rewriter response. Using original prompt.")
-        except Exception: 
-            logging.warning(f"Failed to rewrite image prompt, using original.", exc_info=True)
+        prompt_rewriter_instruction = (
+            "You are a passionate, expressive artistic assistant. Your task is to turn a user's request into a visually striking image prompt.\n\n"
+            "## Rules:\n"
+            "1.  **MATCH THE VIBE (CRITICAL):** \n"
+            "    - If the user wants something **cute/happy**, use bright lighting, soft textures, and vibrant colors.\n"
+            "    - If the user wants something **scary/dark**, use heavy shadows, grit, and unsettling atmosphere.\n"
+            "2.  **DO NOT SANITIZE HORROR:** If the user specifically asks for monsters, zombies, or creepy things, DO NOT water it down. Make it genuinely scary.\n"
+            "3.  **ENHANCE:** Add artistic details (e.g., 'cinematic lighting', 'oil painting texture') that fit the requested mood.\n"
+            f"{context_instruction}\n" # <--- Insert Context Rule Here
+            "## SPECIAL SUBJECTS:\n"
+            "If the user asks for 'Vinny', 'yourself', 'you', or 'a self portrait', you MUST use this description:\n"
+            "- **Subject:** A robust middle-aged Italian-American man with long, wild dark brown hair and a full beard.\n"
+            "- **Attire:** A dark blue coat with gold toggles and a wide leather belt.\n"
+            "- **Props:** Often holding a bottle of rum or a slice of pepperoni pizza.\n"
+            "- **Vibe:** Chaotic, artistic, slightly drunk, pirate-like charm.\n\n"
+            f"## User Request:\n\"{image_prompt}\"\n\n"
+            "## Your Output:\n"
+            "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\"."
+        )
 
-        final_prompt = smarter_prompt
-        
-        # Call Imagen
-        image_file = await api_clients.generate_image_with_imagen(bot_instance.http_session, bot_instance.loop, final_prompt, bot_instance.GCP_PROJECT_ID, bot_instance.FIREBASE_B64)
-        
-        if image_file:
-            response_text = "here, i made this for ya."
-            try:
-                image_file.seek(0)
-                image_bytes = image_file.read()
-                comment_prompt_text = (f"You are Vinny, an eccentric artist. You just finished painting the attached picture based on the user's request for '{image_prompt}'.\nYour task is to generate a short, single-paragraph response to show them your work. LOOK AT THE IMAGE and comment on what you ACTUALLY painted. Be chaotic, funny, or complain about it in your typical lowercase, typo-ridden style.")
-                prompt_parts = [
-                    types.Part(text=comment_prompt_text),
-                    types.Part(inline_data=types.Blob(mime_type="image/png", data=image_bytes))
-                ]
-                response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=[types.Content(parts=prompt_parts)])
-                if response and response.text: 
-                    response_text = response.text.strip()
-            except Exception: 
-                logging.error("Failed to generate creative image comment.", exc_info=True)
+        try:
+            # 2. Generate Enhanced Prompt
+            response = await bot_instance.make_tracked_api_call(
+                model=bot_instance.MODEL_NAME,
+                contents=[prompt_rewriter_instruction],
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
             
-            image_file.seek(0)
-            await message.channel.send(response_text, file=discord.File(image_file, filename="vinny_masterpiece.png"))
-        else:
-            await message.channel.send("ah, crap. vinny's hands are a bit shaky today. the thing came out all wrong.")
+            if not response or not response.text:
+                await message.channel.send("my muse is on vacation. try again.")
+                return None
+
+            data = json.loads(response.text)
+            enhanced_prompt = data.get("enhanced_prompt", image_prompt)
+            core_subject = data.get("core_subject", "something weird")
+            
+            # 3. Announce the "Thinking" Phase
+            thinking_messages = [
+                f"aight, painting **{core_subject}**... gimme a sec.",
+                f"oh i got a vision for **{core_subject}**. hold on.",
+                f"mixing the paints for **{core_subject}**...",
+                f"**{core_subject}**? bold choice. let's see what i can do."
+            ]
+            await message.channel.send(random.choice(thinking_messages))
+
+            # 4. Generate the Image (Imagen 3)
+            # FIX: We use the full API client call here instead of the simplified helper
+            filename = await api_clients.generate_image_with_imagen(
+                bot_instance.http_session, 
+                bot_instance.loop, 
+                enhanced_prompt, 
+                bot_instance.GCP_PROJECT_ID, 
+                bot_instance.FIREBASE_B64
+            )
+
+            if filename:
+                file = discord.File(filename, filename="vinny_art.png")
+                embed = discord.Embed(title=f"🎨 {core_subject.title()}", color=discord.Color.dark_teal())
+                embed.set_image(url="attachment://vinny_art.png")
+                embed.set_footer(text=f"Requested by {message.author.display_name}")
+                
+                await message.channel.send(file=file, embed=embed)
+                
+                # Clean up local file
+                if os.path.exists(filename):
+                    os.remove(filename)
+                
+                # RETURN the prompt so VinnyLogic can save it
+                return enhanced_prompt 
+            
+            else:
+                await message.channel.send("i spilled the paint. something went wrong.")
+                return None
+
+        except Exception as e:
+            logging.error(f"Image generation failed: {e}")
+            await message.channel.send("my brain's fried. i can't paint right now.")
+            return None
 
 async def handle_image_reply(bot_instance, reply_message: discord.Message, original_message: discord.Message):
     """Responds to a user's comment on an existing image."""
