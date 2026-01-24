@@ -118,12 +118,17 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 
                 await message.channel.send(file=file, embed=embed)
                 
-                # Clean up local file
-                if os.path.exists(filename):
-                    os.remove(filename)
+                # --- SAFE CLEANUP FIX ---
+                # We wrap this in a try/except so a "File In Use" error doesn't crash the bot
+                try:
+                    if os.path.exists(filename):
+                        os.remove(filename)
+                except Exception as cleanup_error:
+                    logging.warning(f"Could not delete temp file {filename} (probably in use): {cleanup_error}")
+                # ------------------------
                 
                 # RETURN the prompt so VinnyLogic can save it
-                return enhanced_prompt 
+                return enhanced_prompt
             
             else:
                 await message.channel.send("i spilled the paint. something went wrong.")
