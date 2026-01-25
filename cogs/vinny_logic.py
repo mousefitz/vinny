@@ -116,17 +116,28 @@ class VinnyLogic(commands.Cog):
                 if message.reference:
                     try:
                         ref = await message.channel.fetch_message(message.reference.message_id)
+                        # Check if it's Vinny's message AND has an image/embed
                         if ref.author.id == self.bot.user.id and (ref.attachments or ref.embeds):
-                            # 2. Ask Gatekeeper: Edit or Chat?
-                            if await ai_classifiers.is_image_edit_request(self.bot, cleaned_content):
+                            
+                            # A. INSTANT TRIGGERS (The "Just Do It" List)
+                            # If they use these command words, skip the AI and force the edit.
+                            force_words = ["make ", "add ", "change ", "remove ", "give ", "put ", "draw ", "paint "]
+                            if any(cleaned_content.lower().startswith(w) for w in force_words):
                                 is_image_edit = True
+                                logging.info(f"Trigger Word Detected: Editing Image ('{cleaned_content}')")
+                            
+                            # B. AI CHECK (Fallback for vague requests)
+                            # Only ask the AI if we didn't hit a trigger word
+                            elif await ai_classifiers.is_image_edit_request(self.bot, cleaned_content):
+                                is_image_edit = True
+                                logging.info(f"AI Gatekeeper: Editing Image ('{cleaned_content}')")
+                                
                     except Exception:
                         pass
 
                 if is_image_edit:
                     intent = "generate_image"
-                    args = {"prompt": cleaned_content} # Treat the reply text as the prompt
-                    logging.info(f"Gatekeeper: User {message.author} is editing an image.")
+                    args = {"prompt": cleaned_content} # Use the reply text as the prompt
                 else:
                     # 3. Normal Classifier (if not an edit)
                     intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)

@@ -55,24 +55,33 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 f"- IF the User Request is a completely new idea (e.g., 'draw a car'), IGNORE the previous painting.\n"
             )
 
+        # ... inside handle_image_request ...
+
         prompt_rewriter_instruction = (
-            "You are a passionate, expressive artistic assistant. Your task is to turn a user's request into a visually striking image prompt.\n\n"
-            "## Rules:\n"
-            "1.  **MATCH THE VIBE (CRITICAL):** \n"
-            "    - If the user wants something **cute/happy**, use bright lighting, soft textures, and vibrant colors.\n"
-            "    - If the user wants something **scary/dark**, use heavy shadows, grit, and unsettling atmosphere.\n"
-            "2.  **DO NOT SANITIZE HORROR:** If the user specifically asks for monsters, zombies, or creepy things, DO NOT water it down. Make it genuinely scary.\n"
-            "3.  **ENHANCE:** Add artistic details (e.g., 'cinematic lighting', 'oil painting texture') that fit the requested mood.\n"
-            f"{context_instruction}\n" # <--- Insert Context Rule Here
-            "## SPECIAL SUBJECTS:\n"
-            "If the user asks for 'Vinny', 'yourself', 'you', or 'a self portrait', you MUST use this description:\n"
-            "- **Subject:** A robust middle-aged Italian-American man with long, wild dark brown hair and a full beard.\n"
-            "- **Attire:** A dark blue coat with gold toggles and a wide leather belt.\n"
-            "- **Props:** Often holding a bottle of rum or a slice of pepperoni pizza.\n"
-            "- **Vibe:** Chaotic, artistic, slightly drunk, pirate-like charm.\n\n"
+            "You are an AI Art Director. Your goal is to refine user requests into detailed image generation prompts.\n\n"
+            
+            "## CRITICAL MEMORY PROTOCOL:\n"
+            f"{context_instruction}\n"
+            
+            "## REFERENCE GUIDE (WHO IS WHO):\n"
+            f"1. **THE USER:** The requester's name is **'{message.author.display_name}'**.\n"
+            f"   - If they say 'me', 'myself', or 'I', they mean **'{message.author.display_name}'** (NOT YOU).\n"
+            f"   - If they say 'us', include both '{message.author.display_name}' and Vinny.\n"
+            "2. **VINNY (YOU):** If they say 'you', 'yourself', or 'Vinny', they mean YOU.\n"
+            "   - Vinny's Look: Robust middle-aged Italian-American man, long wild dark hair, full beard, dark blue pirate coat.\n\n"
+
+            "## RULES FOR MODIFICATIONS:\n"
+            "1. **LOCK THE SUBJECT:** If editing (e.g. 'add a hat'), KEEP the previous subject. Do not change a Whale into a Human.\n"
+            "2. **INTERPRET 'ME' CORRECTLY:** If the user asks for 'me', describe a generic person suitable for '{message.author.display_name}' (unless you know their specific look), but DO NOT draw Vinny.\n"
+            "3. **MERGE DETAILS:** Combine context with new requests.\n\n"
+            
+            "## VISUAL STYLE RULES:\n"
+            "1. **MATCH THE VIBE:** Happy = Bright/Soft. Scary = Dark/Gritty.\n"
+            "2. **ENHANCE:** Add 'cinematic lighting', '4k', 'detailed texture'.\n\n"
+            
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
-            "Provide your response as a single, valid JSON object with two keys: \"core_subject\" and \"enhanced_prompt\"."
+            "Provide a single JSON object with keys: \"core_subject\" (2-5 words) and \"enhanced_prompt\" (full description)."
         )
 
         try:
