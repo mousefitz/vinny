@@ -84,56 +84,57 @@ class VinnyLogic(commands.Cog):
                 return await conversation_tasks.handle_correction(self.bot, message)
             
             # =========================================================================
-            # ⛔ THE "SHUT UP AND PAINT" INTERCEPTOR
-            # Logic: If replying to Vinny's image + Action Word -> Paint & Stop.
+            # 1. HANDLING REPLIES (Priority Logic)
             # =========================================================================
             if message.reference:
                 try:
                     ref_msg = await message.channel.fetch_message(message.reference.message_id)
-                    # Check if replying to Vinny's Image
-                    if ref_msg.author.id == self.bot.user.id and (ref_msg.attachments or ref_msg.embeds):
+                    
+                    # IF REPLYING TO VINNY...
+                    if ref_msg.author.id == self.bot.user.id:
                         
-                        # TRIGGER WORDS
-                        trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit"]
-                        first_word = cleaned_content.lower().split(' ')[0]
-                        
-                        # FORCE TRIGGER OR AI CHECK
-                        is_edit = False
-                        if first_word in trigger_words:
-                            is_edit = True
-                            logging.info(f"🎨 FORCE EDIT DETECTED: '{cleaned_content}'")
-                        elif await ai_classifiers.is_image_edit_request(self.bot, cleaned_content):
-                            is_edit = True
-                            logging.info(f"🎨 AI EDIT DETECTED: '{cleaned_content}'")
-
-                        if is_edit:
-                            async with message.channel.typing():
-                                # Get history
-                                previous_prompt = self.channel_image_history.get(message.channel.id)
-                                
-                                # RUN THE IMAGE TASK IMMEDIATELY
-                                final_prompt = await image_tasks.handle_image_request(
-                                    self.bot, message, cleaned_content, previous_prompt
-                                )
-                                
-                                # Update History
-                                if final_prompt:
-                                    self.channel_image_history[message.channel.id] = final_prompt
+                        # --- A. IMAGE EDIT INTERCEPTOR (The "Shut Up and Paint" Logic) ---
+                        if (ref_msg.attachments or ref_msg.embeds):
+                            trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit"]
+                            first_word = cleaned_content.lower().split(' ')[0]
                             
-                            # ⛔ CRITICAL: STOP THE FUNCTION HERE.
-                            return 
+                            # Check: Is it a forced trigger?
+                            is_edit = (first_word in trigger_words)
+                            
+                            # Backup Check: If not forced, ask AI (only if no trigger word found)
+                            if not is_edit: 
+                                is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
 
+                            if is_edit:
+                                logging.info(f"🎨 FORCE EDIT DETECTED: '{cleaned_content}'")
+                                async with message.channel.typing():
+                                    previous_prompt = self.channel_image_history.get(message.channel.id)
+                                    final_prompt = await image_tasks.handle_image_request(
+                                        self.bot, message, cleaned_content, previous_prompt
+                                    )
+                                    if final_prompt:
+                                        self.channel_image_history[message.channel.id] = final_prompt
+                                return # STOP HERE. Vinny paints and leaves.
+
+                        # --- B. NORMAL CHAT REPLY ---
+                        # If we reached this line, it wasn't an image edit. Treat as normal conversation.
+                        await self.update_vinny_mood()
+                        async with message.channel.typing():
+                            await conversation_tasks.handle_direct_reply(self.bot, message)
+                        return # STOP HERE. Vinny chats and leaves.
+                        
                 except Exception as e:
-                    logging.error(f"Error in Image Interceptor: {e}")
-            # =========================================================================
-            
+                    logging.error(f"Error handling reply context: {e}")
+
             # 5. Handle Context Replying (Pinging an image without text)
             if not cleaned_content and self.bot.user.mentioned_in(message): 
                 async for last_message in message.channel.history(limit=1, before=message):
                     if last_message.attachments and "image" in last_message.attachments[0].content_type:
                         return await image_tasks.handle_image_reply(self.bot, message, last_message)
             
-            # 6. Autonomous & General Chat Logic
+            # =========================================================================
+            # 2. AUTONOMOUS & GENERAL CHAT (Mentions / Random)
+            # =========================================================================
             should_respond, is_autonomous = False, False
             if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
                 should_respond = True
@@ -143,37 +144,44 @@ class VinnyLogic(commands.Cog):
                 should_respond = True
 
             if should_respond:
-                # Decide Intent (Since we passed the Interceptor, it's likely Chat or Search)
                 intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
                 async with typing_ctx:
                     if intent == "generate_image":
-                        # Standard image generation (Fresh requests)
-                        prompt = args.get("prompt", "something, i guess. they didn't say what.")
+                        prompt = args.get("prompt", cleaned_content)
                         previous_prompt = self.channel_image_history.get(message.channel.id)
                         final_prompt = await image_tasks.handle_image_request(self.bot, message, prompt, previous_prompt)
-                        if final_prompt:
-                            self.channel_image_history[message.channel.id] = final_prompt
+                        if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
                     elif intent == "generate_user_portrait": 
                         await image_tasks.handle_paint_me_request(self.bot, message)
-                    
+
                     elif intent == "get_user_knowledge":
-                        # ... (Existing knowledge logic) ...
                         target_user_name = args.get("target_user", "")
                         target_user = None
+
+                        # 0. PRIORITY: Check for actual Discord Mentions first
                         valid_mentions = [m for m in message.mentions if m.id != self.bot.user.id]
-                        if valid_mentions: target_user = valid_mentions[0]
+                        if valid_mentions:
+                            target_user = valid_mentions[0]
+
+                        # 1. If no mention, check for "me" / "myself" keywords
                         clean_target = target_user_name.lower().strip()
                         if not target_user and (not clean_target or clean_target in ["me", "myself", "i", "user", "the user", "self", "my profile"]):
                             target_user = message.author
+
+                        # 2. If still no user, try searching by name (Text Search)
                         elif not target_user and message.guild:
                             search_name = target_user_name.replace("@", "").strip()
+                            # A. Try finding by Discord Display Name
                             target_user = discord.utils.find(lambda m: search_name.lower() in m.display_name.lower(), message.guild.members)
+                            
+                            # B. If not found, try finding by Vinny's Internal Nickname
                             if not target_user:
                                 target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, search_name)
-                        
+
+                        # --- EXECUTE REQUEST ---
                         if target_user:
                             await conversation_tasks.handle_knowledge_request(self.bot, message, target_user)
                         else:
@@ -197,7 +205,7 @@ class VinnyLogic(commands.Cog):
                                 try:
                                     score_change = await ai_classifiers.analyze_sentiment_impact(self.bot, message.author.display_name, message.content)
                                 except AttributeError:
-                                    score_change = 0 # Fallback
+                                    score_change = 0 
                                 
                                 if message.guild and score_change != 0:
                                     new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
