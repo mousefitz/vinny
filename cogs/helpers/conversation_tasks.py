@@ -63,6 +63,37 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
         # If a nickname exists, use it. Otherwise, use their Discord display name.
         actual_display_name = custom_nickname if custom_nickname else message.author.display_name
 
+        # --- SENTIMENT & TOPIC SCORING ---
+        # --- DYNAMIC PERSONALITY SCORING (No Lists!) ---
+        # We run this on every message to capture the "vibe" instantly.
+        
+        # Skip short messages to save money/noise (e.g. "ok", "lol")
+        if len(message.content) > 3:
+            impact_score = await ai_classifiers.analyze_sentiment_impact(
+                bot_instance, message.author.display_name, message.content
+            )
+            
+            if impact_score != 0:
+                # 1. Update the Database
+                current_score = user_profile.get("relationship_score", 0)
+                new_score = max(-100, min(100, current_score + impact_score)) # Clamp -100 to 100
+                
+                await bot_instance.firestore_service.save_user_profile_fact(
+                    user_id, guild_id, "relationship_score", new_score
+                )
+                
+                # 2. Update Status Tier (Friend/Enemy/etc)
+                # Ensure update_relationship_status is imported from this file or available
+                await update_relationship_status(bot_instance, user_id, guild_id, new_score)
+                
+                # 3. Log it so you can see it working in the console
+                if impact_score > 0:
+                    logging.info(f"📈 {message.author.display_name} gained {impact_score} pts. Total: {new_score}")
+                else:
+                    logging.info(f"📉 {message.author.display_name} lost {impact_score} pts. Total: {new_score}")
+
+        # --- END SCORING ---
+
         # --- MEMORY INJECTION START ---
         relevant_memories_text = ""
         if message.guild:

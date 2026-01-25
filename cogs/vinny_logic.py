@@ -91,6 +91,7 @@ class VinnyLogic(commands.Cog):
                 
             # Handles simple pings to the preceding image
             cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+            
             if not cleaned_content and self.bot.user.mentioned_in(message): 
                 async for last_message in message.channel.history(limit=1, before=message):
                     if last_message.attachments and "image" in last_message.attachments[0].content_type:
@@ -106,7 +107,31 @@ class VinnyLogic(commands.Cog):
                 should_respond = True
 
             if should_respond:
-                intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
+                # --- START NEW LOGIC ---
+                intent = None
+                args = {}
+                is_image_edit = False
+
+                # 1. Check if replying to Vinny's image
+                if message.reference:
+                    try:
+                        ref = await message.channel.fetch_message(message.reference.message_id)
+                        if ref.author.id == self.bot.user.id and (ref.attachments or ref.embeds):
+                            # 2. Ask Gatekeeper: Edit or Chat?
+                            if await ai_classifiers.is_image_edit_request(self.bot, cleaned_content):
+                                is_image_edit = True
+                    except Exception:
+                        pass
+
+                if is_image_edit:
+                    intent = "generate_image"
+                    args = {"prompt": cleaned_content} # Treat the reply text as the prompt
+                    logging.info(f"Gatekeeper: User {message.author} is editing an image.")
+                else:
+                    # 3. Normal Classifier (if not an edit)
+                    intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
+                # --- END NEW LOGIC ---
+                
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
                 async with typing_ctx:

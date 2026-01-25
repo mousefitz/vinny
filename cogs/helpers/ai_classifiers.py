@@ -160,3 +160,70 @@ async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
     except Exception:
         logging.error("Failed to perform contradiction check.", exc_info=True)
     return False
+
+async def is_image_edit_request(bot_instance, text: str):
+    """
+    Determines if a reply to an image is actually a request to change it.
+    Returns: True (Edit) or False (Just Chat)
+    """
+    prompt = (
+        f"You are a logic filter. The user is replying to an AI-generated image.\n"
+        f"User Message: \"{text}\"\n\n"
+        f"Task: Does this message imply a request to MODIFY, CHANGE, or REGENERATE the image? (e.g. 'add a hat', 'make it darker', 'wrong color').\n"
+        f"If they are just commenting (e.g. 'cool', 'lol', 'wow', 'thanks'), say NO.\n"
+        f"Reply ONLY with 'YES' or 'NO'."
+    )
+    
+    try:
+        response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME,
+            contents=[prompt],
+            config=types.GenerateContentConfig(temperature=0.0) # Zero temp for strict logic
+        )
+        clean_resp = response.text.strip().upper()
+        return "YES" in clean_resp
+    except Exception:
+        return False # Default to chat if brain fails
+
+async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
+    """
+    Asks the AI to judge the message based on Vinny's full personality.
+    Returns: Integer (-10 to +10)
+    """
+    # We grab Vinny's core personality directly from the bot
+    vinny_personality = bot_instance.personality_instruction
+
+    prompt = (
+        f"You are the subconscious emotional judge for this character:\n"
+        f"--- CHARACTER START ---\n{vinny_personality}\n--- CHARACTER END ---\n\n"
+        f"The user '{user_name}' just said this to him:\n"
+        f"\"{message_text}\"\n\n"
+        f"## TASK:\n"
+        f"Based strictly on the character's personality, how does this message affect his opinion of {user_name}?\n"
+        f"Consider:\n"
+        f"- Does it feed his ego? (Positive)\n"
+        f"- Is it flirty or charming? (Positive)\n"
+        f"- Is it annoying, boring, or rude? (Negative)\n"
+        f"- Does it mention something he hates (like authority/Ohio)? (Negative)\n"
+        f"- Does it mention something he loves (like gambling/pizza)? (Positive)\n\n"
+        f"Reply ONLY with a single integer representing the score change (Range: -5 to +5).\n"
+        f"If the message is neutral/boring, reply 0."
+    )
+
+    try:
+        # We use a slightly higher temperature (0.4) so he can pick up on nuance/sarcasm
+        response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config=types.GenerateContentConfig(temperature=0.4, max_output_tokens=5)
+        )
+        
+        # Extract number
+        import re
+        match = re.search(r'-?\d+', response.text.strip())
+        if match:
+            return int(match.group())
+        return 0
+        
+    except Exception:
+        return 0
