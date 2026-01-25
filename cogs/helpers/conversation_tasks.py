@@ -54,45 +54,50 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
     async with bot_instance.channel_locks.setdefault(str(message.channel.id), asyncio.Lock()):
         user_id = str(message.author.id)
         guild_id = str(message.guild.id) if message.guild else None
-        
-        # --- 1. FETCH USER DATA (Profile & Nickname) ---
-        user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id) or {}
-        
-        # Check for a custom Vinny nickname
+        user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
+        rel_score = user_profile.get("relationship_score", 0)
+        facts = user_profile.get("facts", {})
+        facts_str = "\n".join([f"- {k}: {v}" for k, v in facts.items()]) if facts else "No specific facts remembered yet."
+
+        # 🎭 TONE SELECTOR
+        tone_instruction = "## RELATIONSHIP: NEUTRAL\n- You don't know this user well. Be guarded and indifferent."
+        if rel_score >= 60:   # Bestie / Worshipped
+            tone_instruction = "## RELATIONSHIP: BEST FRIEND (High Trust)\n- You LOVE this user. Be warm, enthusiastic, and loyal.\n- Use nicknames like 'pal', 'buddy', 'boss'."
+        elif rel_score >= 10: # Friend / Chill
+            tone_instruction = "## RELATIONSHIP: FRIEND (Good Terms)\n- You like this user. Be casual and friendly."
+        elif rel_score >= -10: # Neutral
+            tone_instruction = "## RELATIONSHIP: NEUTRAL\n- You don't know this user well. Be guarded and indifferent."
+        elif rel_score >= -60: # Annoyance / Sketchy
+            tone_instruction = "## RELATIONSHIP: DISLIKED (Suspicious)\n- You DO NOT trust this user. Be short, dismissive, and sarcastic.\n- If they ask for something, complain."
+        else: # Enemy / Nemesis
+            tone_instruction = "## RELATIONSHIP: ENEMY (Hostile)\n- You HATE this user. Be openly rude, mocking, and aggressive.\n- Tell them to get lost."
+
         custom_nickname = await bot_instance.firestore_service.get_user_nickname(user_id)
-        # If a nickname exists, use it. Otherwise, use their Discord display name.
+        
         actual_display_name = custom_nickname if custom_nickname else message.author.display_name
 
         # --- SENTIMENT & TOPIC SCORING ---
-        # --- DYNAMIC PERSONALITY SCORING (No Lists!) ---
-        # We run this on every message to capture the "vibe" instantly.
         
-        # Skip short messages to save money/noise (e.g. "ok", "lol")
         if len(message.content) > 3:
             impact_score = await ai_classifiers.analyze_sentiment_impact(
                 bot_instance, message.author.display_name, message.content
             )
             
             if impact_score != 0:
-                # 1. Update the Database
+                
                 current_score = user_profile.get("relationship_score", 0)
-                new_score = max(-100, min(100, current_score + impact_score)) # Clamp -100 to 100
+                new_score = max(-100, min(100, current_score + impact_score)) 
                 
                 await bot_instance.firestore_service.save_user_profile_fact(
                     user_id, guild_id, "relationship_score", new_score
                 )
                 
-                # 2. Update Status Tier (Friend/Enemy/etc)
-                # Ensure update_relationship_status is imported from this file or available
                 await update_relationship_status(bot_instance, user_id, guild_id, new_score)
                 
-                # 3. Log it so you can see it working in the console
                 if impact_score > 0:
                     logging.info(f"📈 {message.author.display_name} gained {impact_score} pts. Total: {new_score}")
                 else:
                     logging.info(f"📉 {message.author.display_name} lost {impact_score} pts. Total: {new_score}")
-
-        # --- END SCORING ---
 
         # --- MEMORY INJECTION START ---
         relevant_memories_text = ""
@@ -148,25 +153,36 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                     "FIRST, provide the direct, factual answer. AFTER providing the fact, you can add a short, in-character comment."
                 )
             else: 
+                # PERSONAL QUESTION -> INJECT TONE HERE
                 final_instruction_text = (
+                    f"{tone_instruction}\n\n"
+                    f"## KNOWN USER FACTS:\n{facts_str}\n\n"
                     f"The user '{actual_display_name}' asked you a personal question. "
                     f"Answer them directly and honestly (in character). "
                     f"Do not summarize the chat. Just answer the question. Your mood is {bot_instance.current_mood}."
                 )
         else:
             # 2. STANDARD CHAT
+            facts_header = f"## KNOWN USER FACTS (Context Only - Do not mention unless relevant):\n{facts_str}\n\n"
+            
             if len(cleaned_content) < 4 and not message.attachments:
+                # SHORT MESSAGE -> INJECT TONE HERE
                 final_instruction_text = (
+                    f"{tone_instruction}\n\n"
+                    f"## KNOWN USER FACTS:\n{facts_str}\n\n"
                     f"The user '{actual_display_name}' just said your name to get your attention. "
                     f"They want you to join the current conversation.\n"
                     f"## YOUR TASK:\n"
                     f"1. Look at the recent messages in the history above to see what everyone is talking about.\n"
                     f"2. Chime in with an opinion on that topic, OR just acknowledge {actual_display_name} in a way that fits the vibe.\n"
-                    f"3. **DO NOT SUMMARIZE.** Do not say 'It seems you are discussing pizza.' Just say 'Pizza is trash, get me some gabagool.'\n"
+                    f"3. **DO NOT SUMMARIZE.** Do not say 'It seems you are discussing pizza.' Just say 'it better be authentic connecticut apizza or im sending you to ohio.'\n"
                     f"4. Your mood is {bot_instance.current_mood}."
                 )
             else:
+                # DIRECT TALK -> INJECT TONE HERE
                 final_instruction_text = (
+                    f"{tone_instruction}\n\n"
+                    f"## KNOWN USER FACTS:\n{facts_str}\n\n"
                     f"The user '{actual_display_name}' is talking directly to you. "
                     f"Respond ONLY to their last message: \"{cleaned_content}\". "
                     f"The conversation history is provided for context, but DO NOT summarize it or comment on it. "
@@ -174,7 +190,10 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                 )
 
         if is_autonomous:
+            # AUTONOMOUS -> INJECT TONE HERE
             final_instruction_text = (
+                f"{tone_instruction}\n\n"
+                f"## KNOWN USER FACTS:\n{facts_str}\n\n"
                 f"Your mood is {bot_instance.current_mood}. You are 'hanging out' in this chat server and just reading the messages above. "
                 "Your task is to chime in naturally as if you were just another user.\n"
                 "RULES:\n"
