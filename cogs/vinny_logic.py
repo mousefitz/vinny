@@ -131,7 +131,7 @@ class VinnyLogic(commands.Cog):
                     # 3. Normal Classifier (if not an edit)
                     intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
                 # --- END NEW LOGIC ---
-                
+
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
                 async with typing_ctx:
@@ -597,38 +597,58 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='vibe')
     async def vibe_command(self, ctx, member: discord.Member = None):
         """
-        Checks Vinny's opinion of you, or another user if specified.
+        Checks Vinny's opinion of you using the NEW 9-Tier System.
         Usage: !vibe OR !vibe @User
         """
-        # If no user is specified, default to the author (you)
         target_user = member or ctx.author
-        
         user_id = str(target_user.id)
         guild_id = str(ctx.guild.id) if ctx.guild else None
         
-# 1. Get Relationship Data
+        # 1. Get Profile Data
         profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
         if not profile:
-            # Handle case where Vinny doesn't know them at all
             if target_user == ctx.author:
                 return await ctx.send("i don't even know who you are yet.")
             else:
                 return await ctx.send(f"i don't know who {target_user.display_name} is. never met 'em.")
 
-        rel_status = profile.get("relationship_status", "neutral")
         rel_score = profile.get("relationship_score", 0)
         
-        # 2. Get Current Mood
+        # 2. FORCE RE-CALCULATE STATUS (To fix old "Distrusted" labels)
+        if rel_score >= 90: rel_status = "worshipped"
+        elif rel_score >= 60: rel_status = "bestie"
+        elif rel_score >= 25: rel_status = "friend"
+        elif rel_score >= 10: rel_status = "chill"
+        elif rel_score >= -10: rel_status = "neutral"
+        elif rel_score >= -25: rel_status = "annoyance"
+        elif rel_score >= -60: rel_status = "sketchy"
+        elif rel_score >= -90: rel_status = "enemy"
+        else: rel_status = "nemesis"
+
+        # 3. Get Mood & Color
         mood = self.bot.current_mood
         
-        # 3. Generate Vinny's Comment
+        color_map = {
+            "worshipped": discord.Color.gold(),
+            "bestie":     discord.Color.purple(),
+            "friend":     discord.Color.green(),
+            "chill":      discord.Color.teal(),
+            "neutral":    discord.Color.dark_magenta(),
+            "annoyance":  discord.Color.orange(),
+            "sketchy":    discord.Color.dark_orange(),
+            "enemy":      discord.Color.red(),
+            "nemesis":    discord.Color.dark_red()
+        }
+        embed_color = color_map.get(rel_status, discord.Color.dark_magenta())
+
+        # 4. Generate Comment
         prompt = (
             f"{self.bot.personality_instruction}\n\n"
             f"# TASK:\n"
-            f"The user '{ctx.author.display_name}' just asked for a 'vibe check'.\n"
+            f"The user '{ctx.author.display_name}' is checking your opinion of '{target_user.display_name}'.\n"
             f"- Your Current Mood: {mood}\n"
-            f"- Your Opinion of Them: {rel_status} (Score: {rel_score:.1f})\n\n"
-            f"Write a short, one-sentence response telling them exactly where they stand with you based on these stats."
+            f"- Your Opinion of {target_user.display_name}: {rel_status.upper()} (Score: {rel_score:.1f})\n\n"
+            f"Write a short, one-sentence response telling {ctx.author.display_name} exactly what you think of {target_user.display_name}."
         )
         
         async with ctx.typing():
@@ -642,23 +662,10 @@ class VinnyLogic(commands.Cog):
             except:
                 comment = "my brain's fried."
 
-# Optional: Dynamic Color based on Status
-        color_map = {
-            "worshipped": discord.Color.gold(),
-            "bestie":     discord.Color.purple(),
-            "friend":     discord.Color.green(),
-            "chill":      discord.Color.teal(),
-            "neutral":    discord.Color.dark_magenta(), # Your default
-            "annoyance":  discord.Color.orange(),
-            "sketchy":    discord.Color.dark_orange(),
-            "enemy":      discord.Color.red(),
-            "nemesis":    discord.Color.dark_red()
-        }
-        embed_color = color_map.get(rel_status, discord.Color.dark_magenta())
-
-        # 4. Send Embed
-        embed = discord.Embed(color=discord.Color.dark_magenta())
+        # 5. Send Embed
+        embed = discord.Embed(title=f"Vibe Check: {target_user.display_name}", color=embed_color)
         embed.add_field(name="🧠 Current Mood", value=mood.title(), inline=True)
+        # Use .title() so "sketchy" becomes "Sketchy"
         embed.add_field(name="❤️ Relationship", value=f"{rel_status.title()} ({rel_score:.0f})", inline=True)
         embed.add_field(name="💬 Vinny says:", value=comment, inline=False)
         
