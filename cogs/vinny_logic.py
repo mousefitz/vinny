@@ -107,42 +107,44 @@ class VinnyLogic(commands.Cog):
                 should_respond = True
 
             if should_respond:
-                # --- START NEW LOGIC ---
+                # --- START: PRIORITY IMAGE EDIT CHECK ---
                 intent = None
                 args = {}
                 is_image_edit = False
 
-                # 1. Check if replying to Vinny's image
+                # Check if this is a Reply to Vinny
                 if message.reference:
                     try:
                         ref = await message.channel.fetch_message(message.reference.message_id)
-                        # Check if it's Vinny's message AND has an image/embed
+                        # Is it Vinny's message? AND Does it have an image/embed?
                         if ref.author.id == self.bot.user.id and (ref.attachments or ref.embeds):
                             
-                            # A. INSTANT TRIGGERS (The "Just Do It" List)
-                            # If they use these command words, skip the AI and force the edit.
-                            force_words = ["make ", "add ", "change ", "remove ", "give ", "put ", "draw ", "paint "]
-                            if any(cleaned_content.lower().startswith(w) for w in force_words):
-                                is_image_edit = True
-                                logging.info(f"Trigger Word Detected: Editing Image ('{cleaned_content}')")
+                            # 1. THE "JUST DO IT" LIST
+                            # If the message starts with these words, FORCE an image edit. No questions asked.
+                            force_triggers = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "edit"]
+                            first_word = cleaned_content.lower().split(" ")[0]
                             
-                            # B. AI CHECK (Fallback for vague requests)
-                            # Only ask the AI if we didn't hit a trigger word
+                            if first_word in force_triggers:
+                                is_image_edit = True
+                                logging.info(f"FORCE EDIT: User said '{first_word}' -> Triggering Image Generator.")
+                            
+                            # 2. THE AI BACKUP
+                            # If no trigger word found, ask the AI just in case
                             elif await ai_classifiers.is_image_edit_request(self.bot, cleaned_content):
                                 is_image_edit = True
-                                logging.info(f"AI Gatekeeper: Editing Image ('{cleaned_content}')")
-                                
+                                logging.info("AI GATEKEEPER: Detected image edit request.")
+
                     except Exception:
                         pass
 
+                # --- DECISION TIME ---
                 if is_image_edit:
                     intent = "generate_image"
                     args = {"prompt": cleaned_content} # Use the reply text as the prompt
                 else:
-                    # 3. Normal Classifier (if not an edit)
+                    # If NOT an edit, run the normal brain to decide (Chat, Search, etc.)
                     intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
-                # --- END NEW LOGIC ---
-
+                # --- END: PRIORITY CHECK ---
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
                 async with typing_ctx:
