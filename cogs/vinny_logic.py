@@ -661,6 +661,7 @@ class VinnyLogic(commands.Cog):
         await ctx.send(embed=embed)
 
 # --- VINNY IMAGE COST TRACKER COMMAND ---
+    
     @commands.command(name="vinnycost", hidden=True)
     @commands.is_owner()
     async def vinny_cost(self, ctx):
@@ -674,8 +675,9 @@ class VinnyLogic(commands.Cog):
         try:
             with open(file_path, "r") as f:
                 data = json.load(f)
-                
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            
+            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
+            
             stats = data.get(today_str, {"images": 0, "text_requests": 0, "estimated_cost": 0.0})
             
             # Calculate Totals
