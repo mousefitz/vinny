@@ -36,7 +36,7 @@ async def generate_image_with_imagen(
     gcp_region = "us-central1"
     
     # 1. UPDATED: Model ID changed to imagen-4.0-generate-001
-    api_url = f"https://{gcp_region}-aiplatform.googleapis.com/v1/projects/{gcp_project_id}/locations/{gcp_region}/publishers/google/models/imagen-4.0-generate-001:predict"
+    api_url = f"https://{gcp_region}-aiplatform.googleapis.com/v1/projects/{gcp_project_id}/locations/{gcp_region}/publishers/google/models/imagen-3.0-fast-generate-001:predict"
     
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
     
