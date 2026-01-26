@@ -48,10 +48,10 @@ async def generate_image_with_imagen(
             }
         ],
         "parameters": {
-            "number_of_images": 1,        
-            "aspect_ratio": "1:1",        
-            "safety_filter_level": "block_only_high", 
-            "person_generation": "allow_adult"   
+            "sampleCount": 1,        
+            "aspectRatio": "1:1",        
+            "safetySetting": "block_only_high", 
+            "personGeneration": "allow_adult"   
         }
     }
 
