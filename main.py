@@ -153,8 +153,8 @@ class VinnyBot(commands.Bot):
                 # --- UPDATED: SPLIT INPUT vs OUTPUT TOKENS ---
                 # This ensures we apply the cheap price ($0.30) to input 
                 # and the expensive price ($2.50) ONLY to output.
-                in_tok = response.usage_metadata.prompt_token_count
-                out_tok = response.usage_metadata.candidates_token_count
+                in_tok = response.usage_metadata.prompt_token_count or 0
+                out_tok = response.usage_metadata.candidates_token_count or 0
                 
                 api_clients.track_daily_usage(
                     self.MODEL_NAME, 
