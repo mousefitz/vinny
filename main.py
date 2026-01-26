@@ -105,7 +105,9 @@ class VinnyBot(commands.Bot):
         ]
         
         self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(
-            safety_settings=safety_settings_list
+            safety_settings=safety_settings_list,
+            max_output_tokens=150,  # <--- HARD CAP. He literally cannot write more than ~100 words.
+            temperature=0.8         # Optional: Keeps him creative but focused
         )
     
         # --- Persona & Autonomous Mode ---
