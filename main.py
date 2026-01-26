@@ -106,7 +106,7 @@ class VinnyBot(commands.Bot):
         
         self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(
             safety_settings=safety_settings_list,
-            max_output_tokens=500,  # <--- CHANGED: Increased to 500 to allow tool use
+            #max_output_tokens=5000
             temperature=0.8
         )
     
