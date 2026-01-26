@@ -10,6 +10,9 @@ import aiohttp
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
+# --- IMAGEN MODEL NAME CONSTANT ---
+model_name = "imagen-4.0-fast-generate-001:predict"
+
 # --- VINNY IMAGE & TEXT USAGE TRACKER ---
 def track_daily_usage(model_name, usage_type="image", tokens=0):
     """
@@ -97,15 +100,26 @@ async def generate_image_with_imagen(
     try:
         async with http_session.post(api_url, headers=headers, json=data) as response:
             if response.status == 200:
-                
-                track_daily_usage("imagen-4.0-fast", usage_type="image")
+                result = await response.json()  # <--- WE MUST READ JSON FIRST
 
-                result = await response.json()
+                # 1. Count how many images Google ACTUALLY made
+                actual_count = 0
+                if result.get("predictions"):
+                    actual_count = len(result["predictions"])
                 
-                if result.get("predictions") and "bytesBase64Encoded" in result["predictions"][0]:
+                # 2. Log that exact number
+                if actual_count > 0:
+                    track_daily_usage(model_name, usage_type="image", count=actual_count)
+                    
+                    # Warn the console if we are leaking money
+                    if actual_count > 1:
+                        logging.warning(f"💸 ALERT: API generated {actual_count} images! Check your sampleCount settings!")
+
+                # 3. Return the first image (as usual)
+                if actual_count > 0 and "bytesBase64Encoded" in result["predictions"][0]:
                     return io.BytesIO(base64.b64decode(result["predictions"][0]["bytesBase64Encoded"]))
                 else:
-                    logging.error(f"Imagen API returned 200 OK but the response body was unexpected: {result}")
+                    logging.error(f"Imagen API returned 200 OK but no image found: {result}")
             else:
                 logging.error(f"Imagen API returned non-200 status: {response.status} | Body: {await response.text()}")
     except Exception:
