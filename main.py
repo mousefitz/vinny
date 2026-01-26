@@ -146,6 +146,12 @@ class VinnyBot(commands.Bot):
         try:
             response = await self.gemini_client.aio.models.generate_content(**kwargs)
             
+            if response and response.usage_metadata:
+                from utils import api_clients  
+                tokens = response.usage_metadata.total_token_count
+        
+                api_clients.track_daily_usage(self.MODEL_NAME, usage_type="text", tokens=tokens)
+
             self.API_CALL_COUNTS["text_generation"] += 1
             await self.update_api_count_in_firestore()
             return response

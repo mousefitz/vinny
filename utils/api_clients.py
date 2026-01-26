@@ -2,14 +2,53 @@ import logging
 import io
 import base64
 import json
+import os
+from datetime import datetime
 from typing import Coroutine
 
 import aiohttp
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
+# --- VINNY IMAGE & TEXT USAGE TRACKER ---
+def track_daily_usage(model_name, usage_type="image", tokens=0):
+    """
+    Logs costs for Imagen 4 Fast & Gemini 2.5 Flash.
+    """
+    file_path = "vinny_usage_stats.json"
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    # --- PRICING LOGIC (Jan 2026) ---
+    cost = 0.0
+    
+    if usage_type == "image":
+        if "fast" in model_name: cost = 0.01 
+        elif "imagen-4" in model_name: cost = 0.04
+        else: cost = 0.02
+    elif usage_type == "text":
+        # Gemini 2.5 Flash (~$0.10 per 1M tokens)
+        cost = (tokens / 1_000_000) * 0.10
+
+    # --- SAVE TO FILE ---
+    data = {}
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r") as f: data = json.load(f)
+        except: data = {}
+
+    if today not in data:
+        data[today] = {"images": 0, "text_requests": 0, "tokens": 0, "estimated_cost": 0.0}
+    
+    if usage_type == "image": data[today]["images"] += 1
+    elif usage_type == "text":
+        data[today]["text_requests"] += 1
+        data[today]["tokens"] += tokens
+        
+    data[today]["estimated_cost"] = round(data[today]["estimated_cost"] + cost, 5)
+    
+    with open(file_path, "w") as f: json.dump(data, f, indent=4)
+
 # --- Google Cloud Imagen API ---
-# utils/api_clients.py
 
 async def generate_image_with_imagen(
     http_session: aiohttp.ClientSession,
@@ -58,9 +97,11 @@ async def generate_image_with_imagen(
     try:
         async with http_session.post(api_url, headers=headers, json=data) as response:
             if response.status == 200:
+                
+                track_daily_usage("imagen-4.0-fast", usage_type="image")
+
                 result = await response.json()
                 
-                # The response structure (predictions -> bytesBase64Encoded) usually remains consistent
                 if result.get("predictions") and "bytesBase64Encoded" in result["predictions"][0]:
                     return io.BytesIO(base64.b64decode(result["predictions"][0]["bytesBase64Encoded"]))
                 else:
