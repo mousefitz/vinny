@@ -13,31 +13,40 @@ from google.auth.transport.requests import Request
 # --- IMAGEN MODEL NAME CONSTANT ---
 model_name = "imagen-4.0-fast-generate-001:predict"
 
-# --- VINNY IMAGE & TEXT USAGE TRACKER ---
+# --- PRICING CONSTANTS ---
+# Image Prices (Per Image)
+IMAGEN_FAST_PRICE = 0.02     # Imagen 4 Fast
+IMAGEN_STD_PRICE = 0.04      # Standard
+IMAGEN_ULTRA_PRICE = 0.06    # Ultra
 
-def track_daily_usage(model_name, usage_type="image", count=1, tokens=0): # <--- Added count=1 here
+# Text Prices (Per 1 Million Tokens) - GEMINI 2.5 FLASH PREVIEW
+GEMINI_INPUT_PRICE = 0.30    # $0.30 per 1M Input Tokens
+GEMINI_OUTPUT_PRICE = 2.50   # $2.50 per 1M Output Tokens
+
+# --- VINNY IMAGE & TEXT USAGE TRACKER ---
+def track_daily_usage(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
     """
-    Logs costs for Imagen 4 Fast & Gemini 2.5 Flash.
+    Logs costs with EXACT precision using the constants above.
     """
     file_path = "vinny_usage_stats.json"
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # --- PRICING LOGIC ---
-    unit_cost = 0.0
     total_cost = 0.0
     
     if usage_type == "image":
-        if "fast" in model_name: unit_cost = 0.01 
-        elif "imagen-4" in model_name: unit_cost = 0.04
-        else: unit_cost = 0.02
+        unit_cost = IMAGEN_STD_PRICE
+        if "fast" in model_name: unit_cost = IMAGEN_FAST_PRICE
+        elif "ultra" in model_name: unit_cost = IMAGEN_ULTRA_PRICE
+        elif "imagen-4" in model_name: unit_cost = IMAGEN_STD_PRICE
         
         total_cost = unit_cost * count
 
     elif usage_type == "text":
-        # Gemini 2.5 Flash (~$0.10 per 1M tokens)
-        unit_cost = 0.10 
-        total_cost = (tokens / 1_000_000) * unit_cost
+        cost_in = (input_tokens / 1_000_000) * GEMINI_INPUT_PRICE
+        cost_out = (output_tokens / 1_000_000) * GEMINI_OUTPUT_PRICE
+        total_cost = cost_in + cost_out
 
+    # --- SAVE TO FILE ---
     data = {}
     if os.path.exists(file_path):
         try:
@@ -51,9 +60,9 @@ def track_daily_usage(model_name, usage_type="image", count=1, tokens=0): # <---
         data[today]["images"] += count
     elif usage_type == "text":
         data[today]["text_requests"] += 1
-        data[today]["tokens"] += tokens
+        data[today]["tokens"] += (input_tokens + output_tokens)
         
-    data[today]["estimated_cost"] = round(data[today]["estimated_cost"] + total_cost, 5)
+    data[today]["estimated_cost"] = round(data[today]["estimated_cost"] + total_cost, 6)
     
     with open(file_path, "w") as f: json.dump(data, f, indent=4)
 
