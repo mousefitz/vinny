@@ -145,28 +145,33 @@ class VinnyBot(commands.Bot):
                 kwargs['config'] = types.GenerateContentConfig(safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings)
 
         try:
+            # 1. Make the API Call
             response = await self.gemini_client.aio.models.generate_content(**kwargs)
             
-            if response and response.usage_metadata:
-                from utils import api_clients  
-                
-                # --- UPDATED: SPLIT INPUT vs OUTPUT TOKENS ---
-                # This ensures we apply the cheap price ($0.30) to input 
-                # and the expensive price ($2.50) ONLY to output.
-                in_tok = response.usage_metadata.prompt_token_count or 0
-                out_tok = response.usage_metadata.candidates_token_count or 0
-                
-                api_clients.track_daily_usage(
-                    self.MODEL_NAME, 
-                    usage_type="text", 
-                    input_tokens=in_tok, 
-                    output_tokens=out_tok
-                )
-                # ---------------------------------------------
+            # 2. Try to Track it (Safely)
+            try:
+                if response and response.usage_metadata:
+                    from utils import api_clients  
+                    
+                    # Use 'getattr' and 'or 0' to be paranoid about missing/None values
+                    in_tok = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
+                    out_tok = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+                    
+                    api_clients.track_daily_usage(
+                        self.MODEL_NAME, 
+                        usage_type="text", 
+                        input_tokens=in_tok, 
+                        output_tokens=out_tok
+                    )
+            except Exception as e:
+                # If tracking fails, LOG it, but DO NOT CRASH the bot.
+                logging.error(f"📉 Tracking Error (Non-Fatal): {e}")
 
+            # 3. Success!
             self.API_CALL_COUNTS["text_generation"] += 1
             await self.update_api_count_in_firestore()
             return response
+
         except Exception:
             logging.error("An error occurred in the centralized API call handler.", exc_info=True)
             return None
