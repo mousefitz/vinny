@@ -661,49 +661,49 @@ class VinnyLogic(commands.Cog):
         await ctx.send(embed=embed)
 
 # --- VINNY IMAGE COST TRACKER COMMAND ---
-@commands.command(name="vinnycost", hidden=True)
-@commands.is_owner()
-async def vinny_cost(self, ctx):
-    """Checks the daily and total cost of ALL API usage (Text + Images)."""
-    file_path = "vinny_usage_stats.json"
-    
-    if not os.path.exists(file_path):
-        await ctx.send("📉 No data yet!")
-        return
+    @commands.command(name="vinnycost", hidden=True)
+    @commands.is_owner()
+    async def vinny_cost(self, ctx):
+        """Checks the daily and total cost of ALL API usage (Text + Images)."""
+        file_path = "vinny_usage_stats.json"
+        
+        if not os.path.exists(file_path):
+            await ctx.send("📉 No data yet!")
+            return
 
-    try:
-        with open(file_path, "r") as f:
-            data = json.load(f)
+        try:
+            with open(file_path, "r") as f:
+                data = json.load(f)
+                
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            stats = data.get(today_str, {"images": 0, "text_requests": 0, "estimated_cost": 0.0})
             
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        stats = data.get(today_str, {"images": 0, "text_requests": 0, "estimated_cost": 0.0})
-        
-        # Calculate Totals
-        total_cost = sum(d["estimated_cost"] for d in data.values())
-        total_imgs = sum(d.get("images", 0) for d in data.values())
-        total_text = sum(d.get("text_requests", 0) for d in data.values())
+            # Calculate Totals
+            total_cost = sum(d["estimated_cost"] for d in data.values())
+            total_imgs = sum(d.get("images", 0) for d in data.values())
+            total_text = sum(d.get("text_requests", 0) for d in data.values())
 
-        embed = discord.Embed(title="📉 Vinny's Operational Costs", color=discord.Color.gold())
-        
-        # Today's Breakdown
-        desc = (
-            f"🖼️ **Images:** {stats.get('images', 0)}\n"
-            f"💬 **Chats:** {stats.get('text_requests', 0)}\n"
-            f"🪙 **Today's Bill:** ${stats['estimated_cost']:.4f}"
-        )
-        embed.add_field(name=f"📅 Today ({today_str})", value=desc, inline=False)
-        
-        # All Time
-        embed.add_field(
-            name="💰 All-Time Total", 
-            value=f"**${total_cost:.2f}**\n({total_imgs} Images | {total_text} Chats)", 
-            inline=False
-        )
-        
-        await ctx.send(embed=embed)
+            embed = discord.Embed(title="📉 Vinny's Operational Costs", color=discord.Color.gold())
+            
+            # Today's Breakdown
+            desc = (
+                f"🖼️ **Images:** {stats.get('images', 0)}\n"
+                f"💬 **Chats:** {stats.get('text_requests', 0)}\n"
+                f"🪙 **Today's Bill:** ${stats['estimated_cost']:.4f}"
+            )
+            embed.add_field(name=f"📅 Today ({today_str})", value=desc, inline=False)
+            
+            # All Time
+            embed.add_field(
+                name="💰 All-Time Total", 
+                value=f"**${total_cost:.2f}**\n({total_imgs} Images | {total_text} Chats)", 
+                inline=False
+            )
+            
+            await ctx.send(embed=embed)
 
-    except Exception as e:
-        await ctx.send(f"Ledger error: {e}")
+        except Exception as e:
+            await ctx.send(f"Ledger error: {e}")
 
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))
