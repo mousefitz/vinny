@@ -14,25 +14,30 @@ from google.auth.transport.requests import Request
 model_name = "imagen-4.0-fast-generate-001:predict"
 
 # --- VINNY IMAGE & TEXT USAGE TRACKER ---
-def track_daily_usage(model_name, usage_type="image", tokens=0):
+
+def track_daily_usage(model_name, usage_type="image", count=1, tokens=0): # <--- Added count=1 here
     """
     Logs costs for Imagen 4 Fast & Gemini 2.5 Flash.
     """
     file_path = "vinny_usage_stats.json"
     today = datetime.now().strftime("%Y-%m-%d")
     
-    # --- PRICING LOGIC (Jan 2026) ---
-    cost = 0.0
+    # --- PRICING LOGIC ---
+    unit_cost = 0.0
+    total_cost = 0.0
     
     if usage_type == "image":
-        if "fast" in model_name: cost = 0.01 
-        elif "imagen-4" in model_name: cost = 0.04
-        else: cost = 0.02
+        if "fast" in model_name: unit_cost = 0.01 
+        elif "imagen-4" in model_name: unit_cost = 0.04
+        else: unit_cost = 0.02
+        
+        total_cost = unit_cost * count
+
     elif usage_type == "text":
         # Gemini 2.5 Flash (~$0.10 per 1M tokens)
-        cost = (tokens / 1_000_000) * 0.10
+        unit_cost = 0.10 
+        total_cost = (tokens / 1_000_000) * unit_cost
 
-    # --- SAVE TO FILE ---
     data = {}
     if os.path.exists(file_path):
         try:
@@ -42,12 +47,13 @@ def track_daily_usage(model_name, usage_type="image", tokens=0):
     if today not in data:
         data[today] = {"images": 0, "text_requests": 0, "tokens": 0, "estimated_cost": 0.0}
     
-    if usage_type == "image": data[today]["images"] += 1
+    if usage_type == "image":
+        data[today]["images"] += count
     elif usage_type == "text":
         data[today]["text_requests"] += 1
         data[today]["tokens"] += tokens
         
-    data[today]["estimated_cost"] = round(data[today]["estimated_cost"] + cost, 5)
+    data[today]["estimated_cost"] = round(data[today]["estimated_cost"] + total_cost, 5)
     
     with open(file_path, "w") as f: json.dump(data, f, indent=4)
 
