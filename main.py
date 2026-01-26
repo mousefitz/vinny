@@ -142,7 +142,6 @@ class VinnyBot(commands.Bot):
                 self.API_CALL_COUNTS["search_grounding"] += 1
             else:
                 logging.warning("Search grounding limit reached. Search will not be used.")
-                
                 kwargs['config'] = types.GenerateContentConfig(safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings)
 
         try:
@@ -150,9 +149,20 @@ class VinnyBot(commands.Bot):
             
             if response and response.usage_metadata:
                 from utils import api_clients  
-                tokens = response.usage_metadata.total_token_count
-        
-                api_clients.track_daily_usage(self.MODEL_NAME, usage_type="text", tokens=tokens)
+                
+                # --- UPDATED: SPLIT INPUT vs OUTPUT TOKENS ---
+                # This ensures we apply the cheap price ($0.30) to input 
+                # and the expensive price ($2.50) ONLY to output.
+                in_tok = response.usage_metadata.prompt_token_count
+                out_tok = response.usage_metadata.candidates_token_count
+                
+                api_clients.track_daily_usage(
+                    self.MODEL_NAME, 
+                    usage_type="text", 
+                    input_tokens=in_tok, 
+                    output_tokens=out_tok
+                )
+                # ---------------------------------------------
 
             self.API_CALL_COUNTS["text_generation"] += 1
             await self.update_api_count_in_firestore()
