@@ -106,8 +106,8 @@ class VinnyBot(commands.Bot):
         
         self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(
             safety_settings=safety_settings_list,
-            max_output_tokens=150,  # <--- HARD CAP. He literally cannot write more than ~100 words.
-            temperature=0.8         # Optional: Keeps him creative but focused
+            max_output_tokens=500,  # <--- CHANGED: Increased to 500 to allow tool use
+            temperature=0.8
         )
     
         # --- Persona & Autonomous Mode ---
@@ -130,33 +130,44 @@ class VinnyBot(commands.Bot):
         }
 
     async def make_tracked_api_call(self, **kwargs):
-        """A centralized method to make Gemini API calls and track them."""
+        """A centralized method to make Gemini API calls and track them (Debug Version)."""
         
+        # Rate Limit Check
         if self.API_CALL_COUNTS["text_generation"] >= self.TEXT_GENERATION_LIMIT:
-            logging.warning("Text generation limit reached. Aborting API call.")
+            logging.warning("🛑 Text generation limit reached.")
             return None 
     
+        # Grounding Check
         config = kwargs.get('config')
         if config and config.tools and any(isinstance(t.google_search, types.GoogleSearch) for t in config.tools):
             if self.API_CALL_COUNTS["search_grounding"] < self.SEARCH_GROUNDING_LIMIT:
                 self.API_CALL_COUNTS["search_grounding"] += 1
             else:
-                logging.warning("Search grounding limit reached. Search will not be used.")
-                kwargs['config'] = types.GenerateContentConfig(safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings)
+                logging.warning("⚠️ Search limit reached. Disabling search for this turn.")
+                kwargs['config'] = types.GenerateContentConfig(
+                    safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings,
+                    max_output_tokens=self.GEMINI_TEXT_CONFIG.max_output_tokens,
+                    temperature=self.GEMINI_TEXT_CONFIG.temperature
+                )
 
         try:
-            # 1. Make the API Call
+            logging.info("⏳ Sending request to Gemini...")
             response = await self.gemini_client.aio.models.generate_content(**kwargs)
+            logging.info("✅ Gemini responded!")
             
-            # 2. Try to Track it (Safely)
+            # --- TRACKING LOGIC (With Safety Net) ---
             try:
                 if response and response.usage_metadata:
                     from utils import api_clients  
                     
-                    # Use 'getattr' and 'or 0' to be paranoid about missing/None values
-                    in_tok = getattr(response.usage_metadata, 'prompt_token_count', 0) or 0
-                    out_tok = getattr(response.usage_metadata, 'candidates_token_count', 0) or 0
+                    # Paranoid checks for None values
+                    meta = response.usage_metadata
+                    in_tok = getattr(meta, 'prompt_token_count', 0) or 0
+                    out_tok = getattr(meta, 'candidates_token_count', 0) or 0
                     
+                    # Log the count to console for verification
+                    logging.info(f"📊 Tracking: Input={in_tok} | Output={out_tok}")
+
                     api_clients.track_daily_usage(
                         self.MODEL_NAME, 
                         usage_type="text", 
@@ -164,16 +175,17 @@ class VinnyBot(commands.Bot):
                         output_tokens=out_tok
                     )
             except Exception as e:
-                # If tracking fails, LOG it, but DO NOT CRASH the bot.
-                logging.error(f"📉 Tracking Error (Non-Fatal): {e}")
+                # If tracking fails, print why, but DO NOT CRASH
+                logging.error(f"📉 Ledger Error (Non-Fatal): {e}")
+            # ----------------------------------------
 
-            # 3. Success!
             self.API_CALL_COUNTS["text_generation"] += 1
             await self.update_api_count_in_firestore()
+            
             return response
 
-        except Exception:
-            logging.error("An error occurred in the centralized API call handler.", exc_info=True)
+        except Exception as e:
+            logging.error(f"❌ CRITICAL API ERROR: {e}", exc_info=True)
             return None
         
     async def setup_hook(self):
