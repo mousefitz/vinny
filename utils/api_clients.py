@@ -14,23 +14,15 @@ from google.auth.transport.requests import Request
 model_name = "imagen-4.0-fast-generate-001:predict"
 
 # --- PRICING CONSTANTS ---
-# Image Prices (Per Image)
 IMAGEN_FAST_PRICE = 0.02     # Imagen 4 Fast
 IMAGEN_STD_PRICE = 0.04      # Standard
 IMAGEN_ULTRA_PRICE = 0.06    # Ultra
-
-# Text Prices (Per 1 Million Tokens) - GEMINI 2.5 FLASH PREVIEW
 GEMINI_INPUT_PRICE = 0.30    # $0.30 per 1M Input Tokens
 GEMINI_OUTPUT_PRICE = 2.50   # $2.50 per 1M Output Tokens
 
-# --- VINNY IMAGE & TEXT USAGE TRACKER ---
-def track_daily_usage(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
-    """
-    Logs costs with EXACT precision using the constants above.
-    """
-    file_path = "vinny_usage_stats.json"
-    today = datetime.now().strftime("%Y-%m-%d")
-    
+# --- COST CALCULATOR (Pure Math) ---
+def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
+    """Calculates the estimated cost based on usage."""
     total_cost = 0.0
     
     if usage_type == "image":
@@ -38,33 +30,14 @@ def track_daily_usage(model_name, usage_type="image", count=1, input_tokens=0, o
         if "fast" in model_name: unit_cost = IMAGEN_FAST_PRICE
         elif "ultra" in model_name: unit_cost = IMAGEN_ULTRA_PRICE
         elif "imagen-4" in model_name: unit_cost = IMAGEN_STD_PRICE
-        
         total_cost = unit_cost * count
 
     elif usage_type == "text":
         cost_in = (input_tokens / 1_000_000) * GEMINI_INPUT_PRICE
         cost_out = (output_tokens / 1_000_000) * GEMINI_OUTPUT_PRICE
         total_cost = cost_in + cost_out
-
-    # --- SAVE TO FILE ---
-    data = {}
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r") as f: data = json.load(f)
-        except: data = {}
-
-    if today not in data:
-        data[today] = {"images": 0, "text_requests": 0, "tokens": 0, "estimated_cost": 0.0}
-    
-    if usage_type == "image":
-        data[today]["images"] += count
-    elif usage_type == "text":
-        data[today]["text_requests"] += 1
-        data[today]["tokens"] += (input_tokens + output_tokens)
         
-    data[today]["estimated_cost"] = round(data[today]["estimated_cost"] + total_cost, 6)
-    
-    with open(file_path, "w") as f: json.dump(data, f, indent=4)
+    return round(total_cost, 6)
 
 # --- Google Cloud Imagen API ---
 
@@ -74,10 +47,13 @@ async def generate_image_with_imagen(
     prompt: str,
     gcp_project_id: str,
     firebase_b64_creds: str
-) -> io.BytesIO | None:
+):
+    """
+    Returns a tuple: (image_bytes_io, image_count)
+    """
     if not gcp_project_id or not firebase_b64_creds:
         logging.warning("GCP Project ID or Firebase creds not set. Imagen disabled.")
-        return None
+        return None, 0
     
     token = None
     try:
@@ -88,22 +64,15 @@ async def generate_image_with_imagen(
         token = scoped_creds.token
     except Exception:
         logging.error("Failed to refresh Google auth token for Imagen.", exc_info=True)
-        return None
+        return None, 0
 
     gcp_region = "us-central1"
-    
-    # 1. UPDATED: Model ID changed to imagen-4.0-generate-001
     api_url = f"https://{gcp_region}-aiplatform.googleapis.com/v1/projects/{gcp_project_id}/locations/{gcp_region}/publishers/google/models/imagen-4.0-fast-generate-001:predict"
     
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
     
-    # 2. UPDATED: Parameters updated for the newer API (number_of_images, aspect_ratio)
     data = {
-        "instances": [
-            {
-                "prompt": prompt
-            }
-        ],
+        "instances": [{"prompt": prompt}],
         "parameters": {
             "sampleCount": 1,        
             "aspectRatio": "1:1",        
@@ -115,31 +84,23 @@ async def generate_image_with_imagen(
     try:
         async with http_session.post(api_url, headers=headers, json=data) as response:
             if response.status == 200:
-                result = await response.json()  # <--- WE MUST READ JSON FIRST
-
-                # 1. Count how many images Google ACTUALLY made
+                result = await response.json()
+                
+                # Count images
                 actual_count = 0
                 if result.get("predictions"):
                     actual_count = len(result["predictions"])
                 
-                # 2. Log that exact number
-                if actual_count > 0:
-                    track_daily_usage(model_name, usage_type="image", count=actual_count)
-                    
-                    # Warn the console if we are leaking money
-                    if actual_count > 1:
-                        logging.warning(f"💸 ALERT: API generated {actual_count} images! Check your sampleCount settings!")
-
-                # 3. Return the first image (as usual)
                 if actual_count > 0 and "bytesBase64Encoded" in result["predictions"][0]:
-                    return io.BytesIO(base64.b64decode(result["predictions"][0]["bytesBase64Encoded"]))
+                    image_data = base64.b64decode(result["predictions"][0]["bytesBase64Encoded"])
+                    return io.BytesIO(image_data), actual_count
                 else:
                     logging.error(f"Imagen API returned 200 OK but no image found: {result}")
             else:
                 logging.error(f"Imagen API returned non-200 status: {response.status} | Body: {await response.text()}")
     except Exception:
         logging.error("An exception occurred during the Imagen API call.", exc_info=True)
-    return None
+    return None, 0
 
 # --- OpenWeatherMap API ---
 
@@ -178,24 +139,13 @@ async def get_weather_data(http_session: aiohttp.ClientSession, api_key: str, la
     return None
 
 async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, lat: float, lon: float):
-    """Gets a 5-day forecast (in 3-hour intervals) from the standard free endpoint."""
     if not api_key: return None
-    
-    params = {
-        "lat": lat,
-        "lon": lon,
-        "appid": api_key,
-        "units": "imperial",
-    }
-    
+    params = {"lat": lat, "lon": lon, "appid": api_key, "units": "imperial"}
     try:
         url = "https://api.openweathermap.org/data/2.5/forecast"
         async with http_session.get(url, params=params) as response:
             if response.status == 200:
                 return await response.json()
-            else:
-                error_text = await response.text()
-                logging.error(f"OpenWeatherMap 5-Day Forecast API returned non-200 status: {response.status} | Body: {error_text}")
     except Exception:
         logging.error("5-Day Forecast API call failed.", exc_info=True)
     return None

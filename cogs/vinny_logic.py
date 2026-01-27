@@ -200,24 +200,13 @@ class VinnyLogic(commands.Cog):
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
                     else: 
-                        # Background Sentiment Analysis
                         async def update_sentiment_background():
                             try:
-                                # New Dynamic Sentiment Check
-                                try:
-                                    score_change = await ai_classifiers.analyze_sentiment_impact(self.bot, message.author.display_name, message.content)
-                                except AttributeError:
-                                    score_change = 0 
-                                
-                                if message.guild and score_change != 0:
-                                    new_total_score = await self.bot.firestore_service.update_relationship_score(str(message.author.id), str(message.guild.id), score_change)
-                                    await conversation_tasks.update_relationship_status(self.bot, str(message.author.id), str(message.guild.id), new_total_score)
-                                
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
                                 await self.update_mood_based_on_sentiment(user_sentiment)
                                 await self.update_vinny_mood()
                             except Exception as e:
-                                logging.error(f"Background sentiment update failed: {e}")
+                                logging.error(f"Background mood update failed: {e}")
 
                         asyncio.create_task(update_sentiment_background())
                         
@@ -665,47 +654,37 @@ class VinnyLogic(commands.Cog):
     @commands.command(name="vinnycost", hidden=True)
     @commands.is_owner()
     async def vinny_cost(self, ctx):
-        """Checks the daily and total cost of ALL API usage (Text + Images)."""
-        file_path = "vinny_usage_stats.json"
+        """Checks the Daily, Weekly, Monthly, and Total cost of API usage."""
         
-        if not os.path.exists(file_path):
-            await ctx.send("📉 No data yet!")
+        # Fetch detailed stats from Firestore
+        stats = await self.bot.firestore_service.get_cost_summary()
+        
+        if not stats:
+            await ctx.send("📉 No ledger data found!")
             return
 
-        try:
-            with open(file_path, "r") as f:
-                data = json.load(f)
-            
-            today_str = datetime.datetime.now().strftime("%Y-%m-%d")
-            
-            stats = data.get(today_str, {"images": 0, "text_requests": 0, "estimated_cost": 0.0})
-            
-            # Calculate Totals
-            total_cost = sum(d["estimated_cost"] for d in data.values())
-            total_imgs = sum(d.get("images", 0) for d in data.values())
-            total_text = sum(d.get("text_requests", 0) for d in data.values())
+        daily = stats.get("daily", {})
+        weekly = stats.get("weekly", {})
+        monthly = stats.get("monthly", {})
+        total = stats.get("total", {})
+        meta = stats.get("meta", {})
 
-            embed = discord.Embed(title="📉 Vinny's Operational Costs", color=discord.Color.gold())
-            
-            # Today's Breakdown
-            desc = (
-                f"🖼️ **Images:** {stats.get('images', 0)}\n"
-                f"💬 **Chats:** {stats.get('text_requests', 0)}\n"
-                f"🪙 **Today's Bill:** ${stats['estimated_cost']:.4f}"
-            )
-            embed.add_field(name=f"📅 Today ({today_str})", value=desc, inline=False)
-            
-            # All Time
-            embed.add_field(
-                name="💰 All-Time Total", 
-                value=f"**${total_cost:.2f}**\n({total_imgs} Images | {total_text} Chats)", 
-                inline=False
-            )
-            
-            await ctx.send(embed=embed)
+        embed = discord.Embed(title="📉 Vinny's Fiscal Ledger", color=discord.Color.gold())
+        embed.description = f"**Data as of:** {meta.get('date', 'Unknown')}"
 
-        except Exception as e:
-            await ctx.send(f"Ledger error: {e}")
+        # Helper to format a block
+        def fmt_block(data, label):
+            cost = data.get('estimated_cost', 0.0)
+            imgs = data.get('images', 0)
+            chat = data.get('text_requests', 0)
+            return f"**${cost:.4f}**\n({imgs} Imgs | {chat} Chats)"
+
+        embed.add_field(name="📅 Today", value=fmt_block(daily, "Today"), inline=True)
+        embed.add_field(name="🗓️ This Week", value=fmt_block(weekly, "Week"), inline=True)
+        embed.add_field(name="📆 This Month", value=fmt_block(monthly, "Month"), inline=True)
+        embed.add_field(name="💰 All-Time", value=fmt_block(total, "Total"), inline=True)
+
+        await ctx.send(embed=embed)
 
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))

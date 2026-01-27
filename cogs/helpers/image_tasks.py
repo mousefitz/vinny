@@ -4,6 +4,7 @@ import logging
 import discord
 import random
 import os
+import datetime
 from google.genai import types
 from utils import api_clients
 
@@ -55,30 +56,23 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 f"- IF the User Request is a completely new idea (e.g., 'draw a car'), IGNORE the previous painting.\n"
             )
 
-        # ... inside handle_image_request ...
-
         prompt_rewriter_instruction = (
             "You are an AI Art Director. Your goal is to refine user requests into detailed image generation prompts.\n\n"
-            
             "## CRITICAL MEMORY PROTOCOL:\n"
             f"{context_instruction}\n"
-            
             "## REFERENCE GUIDE (WHO IS WHO):\n"
             f"1. **THE USER:** The requester's name is **'{message.author.display_name}'**.\n"
             f"   - If they say 'me', 'myself', or 'I', they mean **'{message.author.display_name}'** (NOT YOU).\n"
             f"   - If they say 'us', include both '{message.author.display_name}' and Vinny.\n"
             "2. **VINNY (YOU):** If they say 'you', 'yourself', or 'Vinny', they mean YOU.\n"
             "   - Vinny's Look: Robust middle-aged Italian-American man, long wild dark hair, full beard, dark blue pirate coat.\n\n"
-
             "## RULES FOR MODIFICATIONS:\n"
             "1. **LOCK THE SUBJECT:** If editing (e.g. 'add a hat'), KEEP the previous subject. Do not change a Whale into a Human.\n"
             "2. **INTERPRET 'ME' CORRECTLY:** If the user asks for 'me', describe a generic person suitable for '{message.author.display_name}' (unless you know their specific look), but DO NOT draw Vinny.\n"
             "3. **MERGE DETAILS:** Combine context with new requests.\n\n"
-            
             "## VISUAL STYLE RULES:\n"
             "1. **MATCH THE VIBE:** Happy = Bright/Soft. Scary = Dark/Gritty.\n"
             "2. **ENHANCE:** Add 'cinematic lighting', '4k', 'detailed texture'.\n\n"
-            
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
             "Provide a single JSON object with keys: \"core_subject\" (2-5 words) and \"enhanced_prompt\" (full description)."
@@ -100,7 +94,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             enhanced_prompt = data.get("enhanced_prompt", image_prompt)
             core_subject = data.get("core_subject", "something weird")
             
-            # 3. Announce the "Thinking" Phase (Updated: Generic & Silly)
+            # 3. Announce the "Thinking" Phase
             thinking_messages = [
                 "aight, gimme a sec. i gotta find my brushes.",
                 "oh i got a vision. hold on.",
@@ -115,8 +109,8 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             await message.channel.send(random.choice(thinking_messages))
 
             # 4. Generate the Image (Imagen 3)
-            # FIX: We use the full API client call here instead of the simplified helper
-            filename = await api_clients.generate_image_with_imagen(
+            # FIX: Unpack tuple (image_obj, count)
+            image_obj, count = await api_clients.generate_image_with_imagen(
                 bot_instance.http_session, 
                 bot_instance.loop, 
                 enhanced_prompt, 
@@ -124,8 +118,20 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 bot_instance.FIREBASE_B64
             )
 
-            if filename:
-                file = discord.File(filename, filename="vinny_art.png")
+            if image_obj and count > 0:
+                # --- TRACKING (Firestore) ---
+                try:
+                    cost = api_clients.calculate_cost("imagen-4-fast", "image", count=count)
+                    today = datetime.datetime.now().strftime("%Y-%m-%d")
+                    await bot_instance.firestore_service.update_usage_stats(today, {
+                        "images": count,
+                        "cost": cost
+                    })
+                except Exception as e:
+                    logging.error(f"Failed to track image cost: {e}")
+                # ----------------------------
+
+                file = discord.File(image_obj, filename="vinny_art.png")
                 embed = discord.Embed(title=f"🎨 {core_subject.title()}", color=discord.Color.dark_teal())
                 embed.set_image(url="attachment://vinny_art.png")
                 embed.set_footer(text=f"Requested by {message.author.display_name}")
@@ -133,15 +139,14 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 await message.channel.send(file=file, embed=embed)
                 
                 # --- SAFE CLEANUP FIX ---
-                # We wrap this in a try/except so a "File In Use" error doesn't crash the bot
                 try:
-                    if os.path.exists(filename):
-                        os.remove(filename)
+                    # Note: We are using a BytesIO object now, so no file to delete usually,
+                    # but if you modified the helper to save a file, clean it up here.
+                    pass 
                 except Exception as cleanup_error:
-                    logging.warning(f"Could not delete temp file {filename} (probably in use): {cleanup_error}")
+                    logging.warning(f"Cleanup warning: {cleanup_error}")
                 # ------------------------
                 
-                # RETURN the prompt so VinnyLogic can save it
                 return enhanced_prompt
             
             else:
@@ -152,7 +157,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             logging.error(f"Image generation failed: {e}")
             await message.channel.send("my brain's fried. i can't paint right now.")
             return None
-
+        
 async def handle_image_reply(bot_instance, reply_message: discord.Message, original_message: discord.Message):
     """Responds to a user's comment on an existing image."""
     try:

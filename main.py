@@ -130,23 +130,20 @@ class VinnyBot(commands.Bot):
         }
 
     async def make_tracked_api_call(self, **kwargs):
-        """A centralized method to make Gemini API calls and track them (Debug Version)."""
+        """A centralized method to make Gemini API calls and track them (Firestore Version)."""
         
-        # Rate Limit Check
         if self.API_CALL_COUNTS["text_generation"] >= self.TEXT_GENERATION_LIMIT:
             logging.warning("🛑 Text generation limit reached.")
             return None 
     
-        # Grounding Check
         config = kwargs.get('config')
         if config and config.tools and any(isinstance(t.google_search, types.GoogleSearch) for t in config.tools):
             if self.API_CALL_COUNTS["search_grounding"] < self.SEARCH_GROUNDING_LIMIT:
                 self.API_CALL_COUNTS["search_grounding"] += 1
             else:
-                logging.warning("⚠️ Search limit reached. Disabling search for this turn.")
+                logging.warning("⚠️ Search limit reached. Disabling search.")
                 kwargs['config'] = types.GenerateContentConfig(
                     safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings,
-                    max_output_tokens=self.GEMINI_TEXT_CONFIG.max_output_tokens,
                     temperature=self.GEMINI_TEXT_CONFIG.temperature
                 )
 
@@ -155,33 +152,36 @@ class VinnyBot(commands.Bot):
             response = await self.gemini_client.aio.models.generate_content(**kwargs)
             logging.info("✅ Gemini responded!")
             
-            # --- TRACKING LOGIC (With Safety Net) ---
+            # --- TRACKING LOGIC (Firestore) ---
             try:
                 if response and response.usage_metadata:
                     from utils import api_clients  
                     
-                    # Paranoid checks for None values
                     meta = response.usage_metadata
                     in_tok = getattr(meta, 'prompt_token_count', 0) or 0
                     out_tok = getattr(meta, 'candidates_token_count', 0) or 0
                     
-                    # Log the count to console for verification
-                    logging.info(f"📊 Tracking: Input={in_tok} | Output={out_tok}")
-
-                    api_clients.track_daily_usage(
-                        self.MODEL_NAME, 
-                        usage_type="text", 
-                        input_tokens=in_tok, 
-                        output_tokens=out_tok
+                    # Calculate cost
+                    cost = api_clients.calculate_cost(
+                        self.MODEL_NAME, "text", input_tokens=in_tok, output_tokens=out_tok
                     )
+                    
+                    # Log to Firestore
+                    today = datetime.datetime.now().strftime("%Y-%m-%d")
+                    await self.firestore_service.update_usage_stats(today, {
+                        "text_requests": 1,
+                        "tokens": in_tok + out_tok,
+                        "cost": cost
+                    })
+                    
+                    logging.info(f"📊 Tracked: {in_tok} in / {out_tok} out | Cost: ${cost:.5f}")
+
             except Exception as e:
-                # If tracking fails, print why, but DO NOT CRASH
                 logging.error(f"📉 Ledger Error (Non-Fatal): {e}")
             # ----------------------------------------
 
             self.API_CALL_COUNTS["text_generation"] += 1
             await self.update_api_count_in_firestore()
-            
             return response
 
         except Exception as e:
