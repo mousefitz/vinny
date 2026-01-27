@@ -46,8 +46,8 @@ class FirestoreService:
         # 1. Calculate Timeframes
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         year, week, day = dt.isocalendar()
-        week_str = f"{year}-W{week:02d}"  # e.g., "2026-W05"
-        month_str = dt.strftime("%Y-%m")  # e.g., "2026-01"
+        week_str = f"{year}-W{week:02d}"
+        month_str = dt.strftime("%Y-%m")
         
         # 2. Define Document Paths
         base_path = constants.get_bot_state_collection_path(self.APP_ID)

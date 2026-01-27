@@ -672,7 +672,6 @@ class VinnyLogic(commands.Cog):
         embed = discord.Embed(title="📉 Vinny's Fiscal Ledger", color=discord.Color.gold())
         embed.description = f"**Data as of:** {meta.get('date', 'Unknown')}"
 
-        # Helper to format a block
         def fmt_block(data, label):
             cost = data.get('estimated_cost', 0.0)
             imgs = data.get('images', 0)
@@ -685,6 +684,6 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="💰 All-Time", value=fmt_block(total, "Total"), inline=True)
 
         await ctx.send(embed=embed)
-
+        
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))

@@ -21,6 +21,7 @@ GEMINI_INPUT_PRICE = 0.30    # $0.30 per 1M Input Tokens
 GEMINI_OUTPUT_PRICE = 2.50   # $2.50 per 1M Output Tokens
 
 # --- COST CALCULATOR (Pure Math) ---
+
 def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
     """Calculates the estimated cost based on usage."""
     total_cost = 0.0
@@ -92,8 +93,8 @@ async def generate_image_with_imagen(
                     actual_count = len(result["predictions"])
                 
                 if actual_count > 0 and "bytesBase64Encoded" in result["predictions"][0]:
-                    image_data = base64.b64decode(result["predictions"][0]["bytesBase64Encoded"])
-                    return io.BytesIO(image_data), actual_count
+                    img_data = base64.b64decode(result["predictions"][0]["bytesBase64Encoded"])
+                    return io.BytesIO(img_data), actual_count
                 else:
                     logging.error(f"Imagen API returned 200 OK but no image found: {result}")
             else:
