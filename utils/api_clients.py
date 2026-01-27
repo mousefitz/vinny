@@ -57,7 +57,7 @@ async def generate_image_with_genai(client, prompt, model="imagen-3.0-generate-0
                 number_of_images=1,
                 aspect_ratio="1:1",
                 safety_filter_level="block_low_and_above",
-                person_generation="allow_all"
+                person_generation="allow_adult"
             )
         )
         
