@@ -120,39 +120,17 @@ class VinnyBot(commands.Bot):
         self.autonomous_reply_chance = 0.01
         self.reaction_chance = 0.05
         
-        # --- Rate Limiting ---
-        self.TEXT_GENERATION_LIMIT = constants.TEXT_GENERATION_LIMIT
-        self.SEARCH_GROUNDING_LIMIT = constants.SEARCH_GROUNDING_LIMIT
-        self.API_CALL_COUNTS = {
-            "date": str(datetime.date.today()),
-            "text_generation": 0,
-            "search_grounding": 0,
-        }
 
     async def make_tracked_api_call(self, **kwargs):
-        """A centralized method to make Gemini API calls and track them (Firestore Version)."""
+        """A centralized method to make Gemini API calls and track them (Unlimited Version)."""
         
-        if self.API_CALL_COUNTS["text_generation"] >= self.TEXT_GENERATION_LIMIT:
-            logging.warning("🛑 Text generation limit reached.")
-            return None 
-    
-        config = kwargs.get('config')
-        if config and config.tools and any(isinstance(t.google_search, types.GoogleSearch) for t in config.tools):
-            if self.API_CALL_COUNTS["search_grounding"] < self.SEARCH_GROUNDING_LIMIT:
-                self.API_CALL_COUNTS["search_grounding"] += 1
-            else:
-                logging.warning("⚠️ Search limit reached. Disabling search.")
-                kwargs['config'] = types.GenerateContentConfig(
-                    safety_settings=self.GEMINI_TEXT_CONFIG.safety_settings,
-                    temperature=self.GEMINI_TEXT_CONFIG.temperature
-                )
-
+        # 1. Start the call
         try:
             logging.info("⏳ Sending request to Gemini...")
             response = await self.gemini_client.aio.models.generate_content(**kwargs)
             logging.info("✅ Gemini responded!")
             
-            # --- TRACKING LOGIC (Firestore) ---
+            # 2. Track the Cost (Cloud Ledger)
             try:
                 if response and response.usage_metadata:
                     from utils import api_clients  
@@ -161,12 +139,10 @@ class VinnyBot(commands.Bot):
                     in_tok = getattr(meta, 'prompt_token_count', 0) or 0
                     out_tok = getattr(meta, 'candidates_token_count', 0) or 0
                     
-                    # Calculate cost
+                    # Calculate & Log
                     cost = api_clients.calculate_cost(
                         self.MODEL_NAME, "text", input_tokens=in_tok, output_tokens=out_tok
                     )
-                    
-                    # Log to Firestore
                     today = datetime.datetime.now().strftime("%Y-%m-%d")
                     await self.firestore_service.update_usage_stats(today, {
                         "text_requests": 1,
@@ -178,10 +154,7 @@ class VinnyBot(commands.Bot):
 
             except Exception as e:
                 logging.error(f"📉 Ledger Error (Non-Fatal): {e}")
-            # ----------------------------------------
 
-            self.API_CALL_COUNTS["text_generation"] += 1
-            await self.update_api_count_in_firestore()
             return response
 
         except Exception as e:
@@ -246,31 +219,6 @@ class VinnyBot(commands.Bot):
                 if new_chunk: chunks.append(new_chunk)
             else: chunks.append(chunk)
         return chunks
-
-    # --- Rate Limiting Logic ---
-    
-    async def initialize_rate_limiter(self):
-        if not self.firestore_service or not self.firestore_service.db: return
-        
-        today_str = str(datetime.date.today())
-        try:
-            doc_data = await self.firestore_service.get_rate_limit_doc()
-            if doc_data and doc_data.get('date') == today_str:
-                self.API_CALL_COUNTS.update(doc_data)
-                logging.info(f"Loaded today's API counts: {self.API_CALL_COUNTS}")
-            else:
-                await self.firestore_service.set_rate_limit_doc(self.API_CALL_COUNTS)
-                logging.info(f"Reset API counts for new day: {self.API_CALL_COUNTS}")
-        except Exception:
-            logging.error("Failed to initialize rate limiter from Firestore.", exc_info=True)
-
-    async def update_api_count_in_firestore(self):
-        if not self.firestore_service or not self.firestore_service.db: return
-        try:
-            await self.firestore_service.update_rate_limit_doc(self.API_CALL_COUNTS)
-        except Exception:
-            logging.error("Failed to update API count in Firestore.", exc_info=True)
-
 
 if __name__ == "__main__":
     intents = discord.Intents.default()

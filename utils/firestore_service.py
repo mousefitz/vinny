@@ -370,22 +370,3 @@ class FirestoreService:
         except Exception:
             logging.error(f"Failed to process divorce for '{user1_id}'", exc_info=True)
             return False
-
-    async def get_rate_limit_doc(self):
-        if not self.db: return None
-        path = constants.get_bot_state_collection_path(self.APP_ID)
-        doc_ref = self.db.collection(path).document('rate_limit')
-        doc = await self.loop.run_in_executor(None, doc_ref.get)
-        return doc.to_dict() if doc.exists else None
-
-    async def set_rate_limit_doc(self, data: dict):
-        if not self.db: return
-        path = constants.get_bot_state_collection_path(self.APP_ID)
-        doc_ref = self.db.collection(path).document('rate_limit')
-        await self.loop.run_in_executor(None, lambda: doc_ref.set(data))
-
-    async def update_rate_limit_doc(self, data: dict):
-        if not self.db: return
-        path = constants.get_bot_state_collection_path(self.APP_ID)
-        doc_ref = self.db.collection(path).document('rate_limit')
-        await self.loop.run_in_executor(None, doc_ref.update, data)
