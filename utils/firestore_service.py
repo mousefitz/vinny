@@ -99,14 +99,20 @@ class FirestoreService:
         stats_root = self.db.collection(base_path).document("usage_stats")
 
         try:
-            # Fetch all 4 docs in parallel (conceptually)
+            # Fetch all 4 docs in parallel
             refs = [
                 stats_root.collection("daily_stats").document(date_str),
                 stats_root.collection("weekly_stats").document(week_str),
                 stats_root.collection("monthly_stats").document(month_str),
                 stats_root
             ]
-            snapshots = await self.loop.run_in_executor(None, self.db.get_all, refs)
+            
+            # FIX: Use a lambda to expand the list AND cast the result to a list immediately
+            # This fixes the "generator not subscriptable" error
+            snapshots = await self.loop.run_in_executor(
+                None, 
+                lambda: list(self.db.get_all(refs))
+            )
             
             return {
                 "daily": snapshots[0].to_dict() if snapshots[0].exists else {},
