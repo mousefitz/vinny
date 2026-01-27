@@ -200,8 +200,12 @@ class VinnyLogic(commands.Cog):
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
                     else: 
+                        # Background Sentiment Analysis (MOOD ONLY)
                         async def update_sentiment_background():
                             try:
+                                # We REMOVED the relationship_score update here because 
+                                # conversation_tasks.py handles it now. No more double counting!
+                                
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
                                 await self.update_mood_based_on_sentiment(user_sentiment)
                                 await self.update_vinny_mood()
