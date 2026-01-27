@@ -34,11 +34,11 @@ class FirestoreService:
             logging.error("Failed to initialize Firebase from Base64 credentials.", exc_info=True)
             return None
 
-    # --- LEDGER & COST TRACKING (NEW) ---
+    # --- LEDGER & COST TRACKING (FIXED) ---
 
     async def update_usage_stats(self, date_str: str, increments: dict):
         """
-        Updates Daily, Weekly, Monthly, and All-Time stats atomically.
+        Updates Daily, Weekly, Monthly, and All-Time stats atomically using Increments.
         increments: {"images": 1, "cost": 0.04, "text_requests": 1, "tokens": 500}
         """
         if not self.db: return
@@ -53,79 +53,33 @@ class FirestoreService:
         base_path = constants.get_bot_state_collection_path(self.APP_ID)
         stats_root = self.db.collection(base_path).document("usage_stats")
         
-        refs = {
-            "daily": stats_root.collection("daily_stats").document(date_str),
-            "weekly": stats_root.collection("weekly_stats").document(week_str),
-            "monthly": stats_root.collection("monthly_stats").document(month_str),
-            "total": stats_root # Grand Total stored on the parent doc
-        }
+        refs = [
+            stats_root.collection("daily_stats").document(date_str),
+            stats_root.collection("weekly_stats").document(week_str),
+            stats_root.collection("monthly_stats").document(month_str),
+            stats_root # Grand Total
+        ]
 
-        # 3. Atomic Transaction
+        # 3. Batch Write with Atomic Increments
+        # This avoids "contention" because we don't need to read the doc first.
         try:
-            @firestore.transactional
-            def update_ledger(transaction, refs, inc):
-                # Read all docs first
-                snapshots = {key: ref.get(transaction=transaction) for key, ref in refs.items()}
-                
-                for key, snapshot in snapshots.items():
-                    data = snapshot.to_dict() if snapshot.exists else {"images": 0, "text_requests": 0, "tokens": 0, "estimated_cost": 0.0}
-                    
-                    # Add increments
-                    data["images"] = data.get("images", 0) + inc.get("images", 0)
-                    data["text_requests"] = data.get("text_requests", 0) + inc.get("text_requests", 0)
-                    data["tokens"] = data.get("tokens", 0) + inc.get("tokens", 0)
-                    data["estimated_cost"] = round(data.get("estimated_cost", 0.0) + inc.get("cost", 0.0), 6)
-                    
-                    # Write back
-                    transaction.set(refs[key], data, merge=True)
+            batch = self.db.batch()
+            
+            update_data = {
+                "images": firestore.Increment(increments.get("images", 0)),
+                "text_requests": firestore.Increment(increments.get("text_requests", 0)),
+                "tokens": firestore.Increment(increments.get("tokens", 0)),
+                "estimated_cost": firestore.Increment(increments.get("cost", 0.0))
+            }
+            
+            for ref in refs:
+                batch.set(ref, update_data, merge=True)
 
-            await self.loop.run_in_executor(None, update_ledger, self.db.transaction(), refs, increments)
+            await self.loop.run_in_executor(None, batch.commit)
             logging.info(f"💰 Ledger updated for {date_str} (Daily/Weekly/Monthly/Total)")
             
         except Exception:
             logging.error("Failed to update usage ledger.", exc_info=True)
-
-    async def get_cost_summary(self) -> dict:
-        """Retrieves the current Daily, Weekly, Monthly, and Total stats."""
-        if not self.db: return {}
-
-        now = datetime.datetime.now()
-        date_str = now.strftime("%Y-%m-%d")
-        year, week, day = now.isocalendar()
-        week_str = f"{year}-W{week:02d}"
-        month_str = now.strftime("%Y-%m")
-
-        base_path = constants.get_bot_state_collection_path(self.APP_ID)
-        stats_root = self.db.collection(base_path).document("usage_stats")
-
-        try:
-            # Fetch all 4 docs in parallel
-            refs = [
-                stats_root.collection("daily_stats").document(date_str),
-                stats_root.collection("weekly_stats").document(week_str),
-                stats_root.collection("monthly_stats").document(month_str),
-                stats_root
-            ]
-            
-            # FIX: Use a lambda to expand the list AND cast the result to a list immediately
-            # This fixes the "generator not subscriptable" error
-            snapshots = await self.loop.run_in_executor(
-                None, 
-                lambda: list(self.db.get_all(refs))
-            )
-            
-            return {
-                "daily": snapshots[0].to_dict() if snapshots[0].exists else {},
-                "weekly": snapshots[1].to_dict() if snapshots[1].exists else {},
-                "monthly": snapshots[2].to_dict() if snapshots[2].exists else {},
-                "total": snapshots[3].to_dict() if snapshots[3].exists else {},
-                "meta": {"date": date_str, "week": week_str, "month": month_str}
-            }
-        except Exception:
-            logging.error("Failed to fetch cost summary.", exc_info=True)
-            return {}
-
-    # --- EXISTING METHODS (Preserved) ---
     
     async def add_doc(self, collection_path: str, data: dict):
         if not self.db: return None
