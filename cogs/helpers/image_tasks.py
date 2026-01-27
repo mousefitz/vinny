@@ -108,20 +108,20 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             ]
             await message.channel.send(random.choice(thinking_messages))
 
-            # 4. Generate the Image (Imagen 3)
-            # FIX: Unpack tuple (image_obj, count)
-            image_obj, count = await api_clients.generate_image_with_imagen(
-                bot_instance.http_session, 
-                bot_instance.loop, 
-                enhanced_prompt, 
-                bot_instance.GCP_PROJECT_ID, 
-                bot_instance.FIREBASE_B64
+            
+            # 4. Generate the Image (Gemini API Key)
+            image_obj, count = await api_clients.generate_image_with_genai(
+                bot_instance.gemini_client,
+                enhanced_prompt,
+                model="imagen-4.0-fast-generate-001" 
             )
 
             if image_obj and count > 0:
                 # --- TRACKING (Firestore) ---
                 try:
-                    cost = api_clients.calculate_cost("imagen-4-fast", "image", count=count)
+                    # This string contains "fast", so your calculator will correctly charge $0.02
+                    cost = api_clients.calculate_cost("imagen-4.0-fast-generate-001", "image", count=count)
+                    
                     today = datetime.datetime.now().strftime("%Y-%m-%d")
                     await bot_instance.firestore_service.update_usage_stats(today, {
                         "images": count,

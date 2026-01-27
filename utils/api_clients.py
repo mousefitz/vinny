@@ -9,6 +9,7 @@ from typing import Coroutine
 import aiohttp
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
+from google.genai import types
 
 # --- IMAGEN MODEL NAME CONSTANT ---
 model_name = "imagen-4.0-fast-generate-001:predict"
@@ -42,65 +43,32 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
 
 # --- Google Cloud Imagen API ---
 
-async def generate_image_with_imagen(
-    http_session: aiohttp.ClientSession,
-    loop: Coroutine,
-    prompt: str,
-    gcp_project_id: str,
-    firebase_b64_creds: str
-):
+async def generate_image_with_genai(client, prompt, model="imagen-3.0-generate-001"):
     """
-    Returns a tuple: (image_bytes_io, image_count)
+    Generates an image using the google-genai SDK (API Key).
+    Returns: (image_bytes_io, count)
     """
-    if not gcp_project_id or not firebase_b64_creds:
-        logging.warning("GCP Project ID or Firebase creds not set. Imagen disabled.")
-        return None, 0
-    
-    token = None
     try:
-        service_account_info = json.loads(base64.b64decode(firebase_b64_creds).decode('utf-8'))
-        creds = service_account.Credentials.from_service_account_info(service_account_info)
-        scoped_creds = creds.with_scopes(['https://www.googleapis.com/auth/cloud-platform'])
-        await loop.run_in_executor(None, lambda: scoped_creds.refresh(Request()))
-        token = scoped_creds.token
-    except Exception:
-        logging.error("Failed to refresh Google auth token for Imagen.", exc_info=True)
-        return None, 0
-
-    gcp_region = "us-central1"
-    api_url = f"https://{gcp_region}-aiplatform.googleapis.com/v1/projects/{gcp_project_id}/locations/{gcp_region}/publishers/google/models/imagen-4.0-fast-generate-001:predict"
-    
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json; charset=utf-8"}
-    
-    data = {
-        "instances": [{"prompt": prompt}],
-        "parameters": {
-            "sampleCount": 1,        
-            "aspectRatio": "1:1",        
-            "safetySetting": "block_only_high", 
-            "personGeneration": "allow_adult"   
-        }
-    }
-
-    try:
-        async with http_session.post(api_url, headers=headers, json=data) as response:
-            if response.status == 200:
-                result = await response.json()
-                
-                # Count images
-                actual_count = 0
-                if result.get("predictions"):
-                    actual_count = len(result["predictions"])
-                
-                if actual_count > 0 and "bytesBase64Encoded" in result["predictions"][0]:
-                    img_data = base64.b64decode(result["predictions"][0]["bytesBase64Encoded"])
-                    return io.BytesIO(img_data), actual_count
-                else:
-                    logging.error(f"Imagen API returned 200 OK but no image found: {result}")
-            else:
-                logging.error(f"Imagen API returned non-200 status: {response.status} | Body: {await response.text()}")
-    except Exception:
-        logging.error("An exception occurred during the Imagen API call.", exc_info=True)
+        # Call the API
+        response = await client.aio.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="1:1",
+                safety_filter_level="block_only_high",
+                person_generation="allow_adult"
+            )
+        )
+        
+        # Check for results
+        if response.generated_images:
+            image_bytes = response.generated_images[0].image.image_bytes
+            return io.BytesIO(image_bytes), 1
+            
+    except Exception as e:
+        logging.error(f"GenAI Image Generation failed: {e}")
+        
     return None, 0
 
 # --- OpenWeatherMap API ---

@@ -174,9 +174,7 @@ class VinnyBot(commands.Bot):
             firebase_b64_creds=self.FIREBASE_B64,
             app_id=self.APP_ID
         )
-        if self.firestore_service.db:
-            await self.initialize_rate_limiter()
-
+            
         logging.info("Loading cogs...")
         await self.load_extension("cogs.vinny_logic")
         logging.info("Cogs loaded successfully.")
