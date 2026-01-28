@@ -217,27 +217,41 @@ class FirestoreService:
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         doc_ref = self.db.collection(path).document(user_id)
 
-        try:
+        # We define a helper function to run ENTIRELY inside the thread
+        def run_transaction_sync(db, ref, score_delta):
+            transaction = db.transaction()
+            
             @firestore.transactional
             def update_in_transaction(transaction, doc_ref_to_update):
                 snapshot = doc_ref_to_update.get(transaction=transaction)
                 current_score = snapshot.to_dict().get("relationship_score", 0) if snapshot.exists else 0
                 
-                new_score = current_score + sentiment_score
+                new_score = current_score + score_delta
                 new_score = max(-100, min(100, new_score)) # Clamp
                 new_score *= 0.995 # Decay
                 
                 transaction.set(doc_ref_to_update, {"relationship_score": new_score}, merge=True)
                 return new_score
 
-            # 1. Run Transaction
-            new_score = await self.loop.run_in_executor(None, update_in_transaction, self.db.transaction(), doc_ref)
+            return update_in_transaction(transaction, ref)
+
+        try:
+            # 1. Run the wrapper function in the executor
+            # We pass 'self.db' and 'doc_ref' so the thread can create its own transaction
+            new_score = await self.loop.run_in_executor(
+                None, 
+                run_transaction_sync, 
+                self.db, 
+                doc_ref, 
+                sentiment_score
+            )
             
             # 2. Clear Cache AFTER transaction commits
             cache_key = f"{user_id}_{guild_id}"
             if cache_key in self.profile_cache:
                 del self.profile_cache[cache_key]
                 
+            logging.info(f"✅ Updated score for {user_id}: {new_score:.2f}")
             return new_score
         except Exception:
             logging.error(f"Failed to update relationship score for user '{user_id}'", exc_info=True)
