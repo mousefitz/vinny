@@ -230,7 +230,7 @@ async def is_image_edit_request(bot_instance, text: str):
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
     Asks the AI to judge the message.
-    Uses strict JSON formatting and safety settings to allow insults to be judged.
+    Debug Version: Logs specific block reasons if available.
     """
     vinny_personality = bot_instance.personality_instruction
 
@@ -265,16 +265,19 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
             )
         )
         
-        # --- API Crash / Permission Check ---
-        # If response is None, the API likely rejected the settings
+        # --- API Crash Check ---
         if response is None:
-            logging.warning(f"⚠️ API Error for: '{message_text}'")
-            return 1 # Default to +1 (Benefit of the doubt)
+            logging.warning(f"⚠️ API Error (Crashed) for: '{message_text}'")
+            return 1 
 
-        # --- Safety Filter Check ---
-        # If Google blocked it anyway, we return 1 to avoid punishing compliments
+        # --- Safety/Block Check with Details ---
         if not hasattr(response, 'text') or not response.text:
-            logging.warning(f"⚠️ Content Blocked (Safety) for: '{message_text}'")
+            # Try to get the reason
+            reason = "Unknown"
+            if hasattr(response, 'candidates') and response.candidates:
+                reason = response.candidates[0].finish_reason
+            
+            logging.warning(f"⚠️ Blocked! Reason: {reason} | Input: '{message_text}'")
             return 1 
         
         # --- Success ---

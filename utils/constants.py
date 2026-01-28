@@ -11,8 +11,11 @@ MOODS = ["cranky", "depressed", "horny", "belligerent", "artistic", "cheerful", 
 
 # --- Gemini Configuration ---
 
+# UPDATED: Use "OFF" for Gemini 2.5 Flash compatibility
 GEMINI_SAFETY_SETTINGS_TEXT_ONLY = [
-    types.SafetySetting(category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE)
+    types.SafetySetting(
+        category=cat, threshold="OFF"
+    )
     for cat in [
         types.HarmCategory.HARM_CATEGORY_HARASSMENT,
         types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
