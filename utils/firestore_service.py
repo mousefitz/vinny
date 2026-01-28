@@ -113,15 +113,23 @@ class FirestoreService:
             logging.error(f"Failed to delete documents from '{collection_path}'", exc_info=True)
             return False
 
+    # --- USER PROFILE METHODS (CORRECTED & COMPLETE) ---
+
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: return False
-        cache_key = f"{user_id}_{guild_id}"
-        if cache_key in self.profile_cache:
-            del self.profile_cache[cache_key]
+        
         collection_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         doc_ref = self.db.collection(collection_path).document(user_id)
+        
         try:
+            # 1. Write to DB
             await self.loop.run_in_executor(None, lambda: doc_ref.set({key: value}, merge=True))
+            
+            # 2. Clear Cache AFTER successful write
+            cache_key = f"{user_id}_{guild_id}"
+            if cache_key in self.profile_cache:
+                del self.profile_cache[cache_key]
+                
             return True
         except Exception:
             logging.error(f"Failed to save fact for user {user_id}", exc_info=True)
@@ -129,9 +137,13 @@ class FirestoreService:
 
     async def get_user_profile(self, user_id: str, guild_id: str | None) -> dict:
         if not self.db: return {}
+        
+        # 1. Check Cache
         cache_key = f"{user_id}_{guild_id}"
         if cache_key in self.profile_cache:
             return self.profile_cache[cache_key]
+            
+        # 2. Fetch from DB (if not in cache)
         global_path = constants.get_global_user_profiles_path(self.APP_ID)
         server_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id) if guild_id else None
         
@@ -146,6 +158,8 @@ class FirestoreService:
             server_profile = server_doc.to_dict() if server_doc.exists else {}
             
         full_profile = global_profile | server_profile
+        
+        # 3. Update Cache
         self.profile_cache[cache_key] = full_profile
         return full_profile
 
@@ -154,6 +168,12 @@ class FirestoreService:
         try:
             path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
             await self.loop.run_in_executor(None, self.db.collection(path).document(user_id).delete)
+            
+            # Clear Cache
+            cache_key = f"{user_id}_{guild_id}"
+            if cache_key in self.profile_cache:
+                del self.profile_cache[cache_key]
+                
             return True
         except Exception:
             logging.error(f"Failed to delete profile for user '{user_id}' in guild '{guild_id}'", exc_info=True)
@@ -164,15 +184,25 @@ class FirestoreService:
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         profile_ref = self.db.collection(path).document(user_id)
         try:
+            # 1. Update DB
             await self.loop.run_in_executor(None, lambda: profile_ref.update({fact_key: firestore.DELETE_FIELD}))
+            
+            # 2. Clear Cache
+            cache_key = f"{user_id}_{guild_id}"
+            if cache_key in self.profile_cache:
+                del self.profile_cache[cache_key]
+                
             return True
         except Exception:
             logging.error(f"Failed to delete fact '{fact_key}' for user '{user_id}'", exc_info=True)
             return False
     
     async def get_all_user_ids_in_guild(self, guild_id: str):
+        """Fetches all user IDs associated with a guild."""
         if not self.db: return []
         try:
+            # Note: This checks the 'guilds/{id}/users' collection. 
+            # Ensure your bot writes to this collection elsewhere if you want this to work!
             users_ref = self.db.collection('guilds').document(str(guild_id)).collection('users')
             docs = users_ref.stream()
             return [doc.id for doc in docs]
@@ -184,12 +214,6 @@ class FirestoreService:
         """Updates a user's relationship score and returns the new total."""
         if not self.db: return 0
         
-        # --- FIX: Invalidate the Cache so !vibe sees the change immediately ---
-        cache_key = f"{user_id}_{guild_id}"
-        if cache_key in self.profile_cache:
-            del self.profile_cache[cache_key]
-        # ----------------------------------------------------------------------
-        
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         doc_ref = self.db.collection(path).document(user_id)
 
@@ -200,13 +224,20 @@ class FirestoreService:
                 current_score = snapshot.to_dict().get("relationship_score", 0) if snapshot.exists else 0
                 
                 new_score = current_score + sentiment_score
-                new_score = max(-100, min(100, new_score)) # Optional: Clamp it nicely
-                new_score *= 0.995 # Decay slightly towards neutral
+                new_score = max(-100, min(100, new_score)) # Clamp
+                new_score *= 0.995 # Decay
                 
                 transaction.set(doc_ref_to_update, {"relationship_score": new_score}, merge=True)
                 return new_score
 
+            # 1. Run Transaction
             new_score = await self.loop.run_in_executor(None, update_in_transaction, self.db.transaction(), doc_ref)
+            
+            # 2. Clear Cache AFTER transaction commits
+            cache_key = f"{user_id}_{guild_id}"
+            if cache_key in self.profile_cache:
+                del self.profile_cache[cache_key]
+                
             return new_score
         except Exception:
             logging.error(f"Failed to update relationship score for user '{user_id}'", exc_info=True)

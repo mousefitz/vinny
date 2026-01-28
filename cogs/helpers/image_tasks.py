@@ -132,9 +132,13 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 # ----------------------------
 
                 file = discord.File(image_obj, filename="vinny_art.png")
+                # NEW CODE: Save prompt in footer so we can edit it later
                 embed = discord.Embed(title=f"🎨 {core_subject.title()}", color=discord.Color.dark_teal())
                 embed.set_image(url="attachment://vinny_art.png")
-                embed.set_footer(text=f"Requested by {message.author.display_name}")
+                
+                # Truncate prompt to fit in footer (limit is 2048, we use 1000 to be safe)
+                clean_prompt = enhanced_prompt[:1000].replace("\n", " ")
+                embed.set_footer(text=f"{clean_prompt} | Requested by {message.author.display_name}")
                 
                 await message.channel.send(file=file, embed=embed)
                 

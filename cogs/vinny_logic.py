@@ -110,7 +110,18 @@ class VinnyLogic(commands.Cog):
                             if is_edit:
                                 logging.info(f"🎨 FORCE EDIT DETECTED: '{cleaned_content}'")
                                 async with message.channel.typing():
-                                    previous_prompt = self.channel_image_history.get(message.channel.id)
+                                    # 1. Try to get prompt from the specific message we are replying to
+                                    previous_prompt = None
+                                    if ref_msg.embeds and ref_msg.embeds[0].footer.text:
+                                        footer_text = ref_msg.embeds[0].footer.text
+                                        if "|" in footer_text:
+                                            # Extract the part before the "|" separator
+                                            previous_prompt = footer_text.split("|")[0].strip()
+
+                                    # 2. Fallback to channel history (for old images without footers)
+                                    if not previous_prompt:
+                                        previous_prompt = self.channel_image_history.get(message.channel.id)
+
                                     final_prompt = await image_tasks.handle_image_request(
                                         self.bot, message, cleaned_content, previous_prompt
                                     )
