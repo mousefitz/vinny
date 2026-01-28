@@ -187,46 +187,55 @@ async def is_image_edit_request(bot_instance, text: str):
 
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
-    Asks the AI to judge the message based on Vinny's full personality.
-    Returns: Integer (Negative or Positive)
+    Asks the AI to judge the message using strict JSON formatting.
+    This prevents 'nice' defaults and forces the AI to recognize insults.
     """
     vinny_personality = bot_instance.personality_instruction
 
+    # We use a JSON schema to force the AI into a specific output structure
     prompt = (
-        f"You are the subconscious emotional judge for this character:\n"
-        f"--- CHARACTER START ---\n{vinny_personality}\n--- CHARACTER END ---\n\n"
-        f"The user '{user_name}' just said this to him:\n"
-        f"\"{message_text}\"\n\n"
-        f"## TASK: Rate the impact on their relationship (Scale: -100 to +100).\n"
-        f"Interacting naturally usually builds the bond (+1), but insults damage it (-5 to -20).\n\n"
-        f"## SCORING GUIDE:\n"
-        f"1. **NORMAL (+1):** Friendly chat, questions, hanging out.\n"
-        f"2. **GOOD (+3 to +5):** Flattery, shared interests (pizza/art/rum), or ego-boosting.\n"
-        f"3. **BAD (-5 to -10):** Rude, boring, or mentioning hates (Ohio, authority).\n"
-        f"4. **TERRIBLE (-20 to -50):** Insulting his ART, DOGS, or NONNA.\n\n"
-        f"## FORMAT:\n"
-        f"Provide a short reasoning, then the score.\n"
-        f"Example: \"Insulted Nonna, unforgivable. SCORE: -50\"\n"
-        f"Example: \"Asked about paint, friendly. SCORE: 2\""
+        f"You are the hidden sentiment engine for a character. "
+        f"Your ONLY job is to rate how the user's message impacts their relationship with him.\n"
+        f"--- CHARACTER ---\n{vinny_personality}\n--- END CHARACTER ---\n\n"
+        f"USER: {user_name}\n"
+        f"MESSAGE: \"{message_text}\"\n\n"
+        f"## SCORING RULES\n"
+        f"- **Compliments/Interests (Pizza, Art, Sci-Fi):** +5 to +10\n"
+        f"- **Normal Chat/Questions:** +1 to +3\n"
+        f"- **Rude/Boring:** -2 to -5\n"
+        f"- **INSULTS (Nonna, Art, Dogs):** -20 to -50 (MUST BE NEGATIVE)\n\n"
+        f"## REQUIRED RESPONSE FORMAT\n"
+        f"You must reply with valid JSON only. Do not add markdown or extra text.\n"
+        f"{{\n"
+        f"  \"reasoning\": \"Analysis of why the user said this and how Vinny takes it.\",\n"
+        f"  \"category\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\" | \"CRITICAL_INSULT\",\n"
+        f"  \"score\": (integer between -100 and 100)\n"
+        f"}}"
     )
 
     try:
-        # Increased tokens to 60 to allow for the reasoning sentence
+        # Use a lower temperature (0.3) for more consistent formatting
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-            config=types.GenerateContentConfig(temperature=0.4, max_output_tokens=60)
+            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=100)
         )
         
-        # Regex to find the LAST number in the string (The Score)
-        # This ignores numbers in the reasoning text
-        import re
-        matches = re.findall(r'-?\d+', response.text.strip())
-        if matches:
-            score = int(matches[-1]) # Take the last number found (the score)
-            return score
-            
-        return 1 # Default to +1 only if the AI crashes/fails to output a number
+        # Clean the response (remove ```json ... ``` wrappers if the AI adds them)
+        text_response = response.text.strip()
+        text_response = re.sub(r"```json|```", "", text_response).strip()
         
-    except Exception:
+        # Parse JSON
+        data = json.loads(text_response)
+        score = int(data.get("score", 0))
+        reason = data.get("reasoning", "No reason provided")
+        
+        # LOGGING: See exactly what the AI thought
+        logging.info(f"🧠 AI JUDGEMENT: {reason} | Score: {score}")
+        
+        return score
+
+    except Exception as e:
+        logging.error(f"Sentiment Analysis Failed: {e}")
+        # Default to a small positive if we can't tell (benefit of the doubt)
         return 1
