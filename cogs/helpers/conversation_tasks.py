@@ -25,6 +25,25 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         await handle_text_or_image_response(bot_instance, message, is_autonomous=False)
         return
 
+    if len(message.content) > 3:
+        impact_score = await ai_classifiers.analyze_sentiment_impact(
+            bot_instance, message.author.display_name, message.content
+        )
+        if impact_score != 0:
+            user_id = str(message.author.id)
+            guild_id = str(message.guild.id) if message.guild else None
+            
+            new_score = await bot_instance.firestore_service.update_relationship_score(
+                user_id, guild_id, impact_score
+            )
+            
+            await update_relationship_status(bot_instance, user_id, guild_id, new_score)
+            
+            if impact_score > 0: 
+                logging.info(f"📈 {message.author.display_name} gained {impact_score} pts via Reply. Total: {new_score:.2f}")
+            else: 
+                logging.info(f"📉 {message.author.display_name} lost {impact_score} pts via Reply. Total: {new_score:.2f}")
+                
     user_name_to_use = await bot_instance.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
     
     reply_prompt = (

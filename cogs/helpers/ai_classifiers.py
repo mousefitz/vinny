@@ -188,7 +188,7 @@ async def is_image_edit_request(bot_instance, text: str):
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
     Asks the AI to judge the message based on Vinny's full personality.
-    Returns: Integer (-10 to +10)
+    Returns: Integer (Negative or Positive, NEVER Zero)
     """
     # We grab Vinny's core personality directly from the bot
     vinny_personality = bot_instance.personality_instruction
@@ -198,16 +198,14 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         f"--- CHARACTER START ---\n{vinny_personality}\n--- CHARACTER END ---\n\n"
         f"The user '{user_name}' just said this to him:\n"
         f"\"{message_text}\"\n\n"
-        f"## TASK:\n"
-        f"Based strictly on the character's personality, how does this message affect his opinion of {user_name}?\n"
-        f"Consider:\n"
-        f"- Does it feed his ego? (Positive)\n"
-        f"- Is it flirty or charming? (Positive)\n"
-        f"- Is it annoying, boring, or rude? (Negative)\n"
-        f"- Does it mention something he hates (like authority/Ohio)? (Negative)\n"
-        f"- Does it mention something he loves (like gambling/pizza)? (Positive)\n\n"
-        f"Reply ONLY with a single integer representing the score change (Range: -5 to +5).\n"
-        f"If the message is neutral/boring, reply 0."
+        f"## TASK: Rate the impact on their relationship (Scale: -100 to +100).\n"
+        f"There is NO neutral. Every interaction matters.\n\n"
+        f"## BALANCED SCORING GUIDE:\n"
+        f"1. **NORMAL CHAT (+1):** Standard interaction, asking questions, or just hanging out. This is the slow, steady build of friendship.\n"
+        f"2. **HIGH POSITIVE (+2 to +5):** Feeding his ego, flirting, complimenting his art/beard, or shared excitement about pizza/rum.\n"
+        f"3. **NEGATIVE (-2 to -5):** Being rude, boring, dismissive, or mentioning things he hates (Ohio, authority, sobriety).\n"
+        f"4. **SEVERE NEGATIVE (-10 to -15):** Insulting his ART, his DOGS, or his NONNA. This is a major blow, but not instant hatred.\n\n"
+        f"Reply ONLY with a single non-zero integer."
     )
 
     try:
@@ -222,8 +220,11 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         import re
         match = re.search(r'-?\d+', response.text.strip())
         if match:
-            return int(match.group())
-        return 0
+            score = int(match.group())
+            # Failsafe: If AI stubbornly returns 0, force it to +1 (Benefit of the doubt)
+            return 1 if score == 0 else score
+            
+        return 1 # Default to small positive if parsing fails
         
     except Exception:
-        return 0
+        return 1 # Default to small positive if error
