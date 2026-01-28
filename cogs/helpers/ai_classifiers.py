@@ -184,15 +184,14 @@ async def is_image_edit_request(bot_instance, text: str):
         return "YES" in clean_resp
     except Exception:
         return False # Default to chat if brain fails
-
+        
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
     Asks the AI to judge the message using strict JSON formatting.
-    This prevents 'nice' defaults and forces the AI to recognize insults.
+    Balanced version: Insults hurt, but don't destroy the game.
     """
     vinny_personality = bot_instance.personality_instruction
 
-    # We use a JSON schema to force the AI into a specific output structure
     prompt = (
         f"You are the hidden sentiment engine for a character. "
         f"Your ONLY job is to rate how the user's message impacts their relationship with him.\n"
@@ -203,7 +202,8 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         f"- **Compliments/Interests (Pizza, Art, Sci-Fi):** +5 to +10\n"
         f"- **Normal Chat/Questions:** +1 to +3\n"
         f"- **Rude/Boring:** -2 to -5\n"
-        f"- **INSULTS (Nonna, Art, Dogs):** -20 to -50 (MUST BE NEGATIVE)\n\n"
+        f"- **CRITICAL INSULTS (Nonna, Art, Dogs):** -10 to -20 (MAJOR PENALTY)\n"
+        f"  *If they insult his Nonna or Dogs, you MUST reply with a score between -10 and -20.*\n\n"
         f"## REQUIRED RESPONSE FORMAT\n"
         f"You must reply with valid JSON only. Do not add markdown or extra text.\n"
         f"{{\n"
@@ -214,14 +214,20 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
     )
 
     try:
-        # Use a lower temperature (0.3) for more consistent formatting
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
             config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=100)
         )
         
-        # Clean the response (remove ```json ... ``` wrappers if the AI adds them)
+        # --- SAFETY CHECK ---
+        # If Google blocks the response (usually because the user was too offensive),
+        # we assume it was a CRITICAL INSULT but apply a fair penalty.
+        if not response or not hasattr(response, 'text') or not response.text:
+            logging.warning(f"⚠️ Sentiment blocked by Safety Filter for: '{message_text}'")
+            return -10  # Reduced from -50 to -10
+        
+        # Clean the response
         text_response = response.text.strip()
         text_response = re.sub(r"```json|```", "", text_response).strip()
         
@@ -230,12 +236,11 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         score = int(data.get("score", 0))
         reason = data.get("reasoning", "No reason provided")
         
-        # LOGGING: See exactly what the AI thought
         logging.info(f"🧠 AI JUDGEMENT: {reason} | Score: {score}")
         
         return score
 
     except Exception as e:
         logging.error(f"Sentiment Analysis Failed: {e}")
-        # Default to a small positive if we can't tell (benefit of the doubt)
-        return 1
+        return 0
+
