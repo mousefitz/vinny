@@ -260,10 +260,12 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
             )
         )
         
-        # Safety Check (Keep this just in case)
+        # --- FIX: INNOCENT UNTIL PROVEN GUILTY ---
+        # If Google blocks the response, we assume it was a False Positive (like 'lashing out').
+        # We return 1 (Small Positive) or 0 (Neutral) to be safe.
         if not response or not hasattr(response, 'text') or not response.text:
-            logging.warning(f"⚠️ Sentiment blocked by Safety Filter for: '{message_text}'")
-            return -10
+            logging.warning(f"⚠️ Sentiment blocked by Safety Filter for: '{message_text}' - Defaulting to Neutral.")
+            return 0  # <--- CHANGED FROM -10 TO 0
         
         # Clean & Parse
         text_response = response.text.strip()
