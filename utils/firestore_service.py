@@ -211,48 +211,50 @@ class FirestoreService:
             return []
         
     async def update_relationship_score(self, user_id: str, guild_id: str, sentiment_score: int):
-        """Updates a user's relationship score and returns the new total."""
+        """
+        Updates a user's relationship score.
+        Uses a direct Read-Modify-Write approach to avoid threading lockups.
+        """
         if not self.db: return 0
         
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         doc_ref = self.db.collection(path).document(user_id)
 
-        # We define a helper function to run ENTIRELY inside the thread
-        def run_transaction_sync(db, ref, score_delta):
-            transaction = db.transaction()
-            
-            @firestore.transactional
-            def update_in_transaction(transaction, doc_ref_to_update):
-                snapshot = doc_ref_to_update.get(transaction=transaction)
-                current_score = snapshot.to_dict().get("relationship_score", 0) if snapshot.exists else 0
+        # Helper function to run in the background thread
+        def sync_update():
+            try:
+                # 1. READ current score directly
+                doc = doc_ref.get()
+                current_data = doc.to_dict() if doc.exists else {}
+                current_score = current_data.get("relationship_score", 0)
                 
-                new_score = current_score + score_delta
-                new_score = max(-100, min(100, new_score)) # Clamp
-                new_score *= 0.995 # Decay
+                # 2. CALCULATE new score
+                new_score = current_score + sentiment_score
+                new_score = max(-100, min(100, new_score)) # Clamp between -100 and 100
+                new_score *= 0.995 # Apply slight decay (memory fading)
                 
-                transaction.set(doc_ref_to_update, {"relationship_score": new_score}, merge=True)
+                # 3. WRITE back to database immediately
+                doc_ref.set({"relationship_score": new_score}, merge=True)
                 return new_score
-
-            return update_in_transaction(transaction, ref)
+            except Exception as e:
+                logging.error(f"❌ DB Update failed inside thread: {e}")
+                return None
 
         try:
-            # 1. Run the wrapper function in the executor
-            # We pass 'self.db' and 'doc_ref' so the thread can create its own transaction
-            new_score = await self.loop.run_in_executor(
-                None, 
-                run_transaction_sync, 
-                self.db, 
-                doc_ref, 
-                sentiment_score
-            )
+            # Run the sync_update function in the background
+            new_score = await self.loop.run_in_executor(None, sync_update)
             
-            # 2. Clear Cache AFTER transaction commits
-            cache_key = f"{user_id}_{guild_id}"
-            if cache_key in self.profile_cache:
-                del self.profile_cache[cache_key]
+            if new_score is not None:
+                # 4. CRITICAL: Clear the cache so !vibe updates immediately
+                cache_key = f"{user_id}_{guild_id}"
+                if cache_key in self.profile_cache:
+                    del self.profile_cache[cache_key]
                 
-            logging.info(f"✅ Updated score for {user_id}: {new_score:.2f}")
-            return new_score
+                logging.info(f"✅ Updated score for {user_id}: {new_score:.2f}")
+                return new_score
+            else:
+                return 0
+            
         except Exception:
             logging.error(f"Failed to update relationship score for user '{user_id}'", exc_info=True)
             return 0
