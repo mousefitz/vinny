@@ -61,8 +61,15 @@ class VinnyLogic(commands.Cog):
         elif isinstance(error, commands.MemberNotFound): await ctx.send(f"who? couldn't find anyone named '{error.argument}'.")
         elif isinstance(error, commands.BotMissingPermissions): await ctx.send("you're not the boss of me, but also i literally can't do that. check my permissions.")
         elif isinstance(error, commands.CommandOnCooldown): await ctx.send(f"whoa there, slow down. try again in {error.retry_after:.2f} seconds.")
-        elif isinstance(error, commands.is_owner): await ctx.send("heh. nice try, pal.")
-        else: await ctx.send("ah crap, my brain just shorted out. somethin' went wrong with that command.")
+        elif isinstance(error, commands.NotOwner):
+            await ctx.send("heh. nice try, pal. admins only.")
+        elif isinstance(error, commands.MissingPermissions):
+            await ctx.send("you don't have the badges for that one, chief.")
+        else:
+            # Log the full error to console so we can debug other issues
+            logging.error(f"Error in command '{ctx.command}':", exc_info=error)
+       
+        
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
