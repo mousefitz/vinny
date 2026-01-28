@@ -3,6 +3,8 @@ import re
 import logging
 from google.genai import types
 
+# Summarize recent conversation context
+
 async def get_short_term_summary(bot_instance, message_history: list):
     """Summarizes the last few messages to find the current topic."""
     conversation_text = "\n".join(message_history)
@@ -23,6 +25,8 @@ async def get_short_term_summary(bot_instance, message_history: list):
     except Exception:
         logging.error("Failed to generate short-term summary.", exc_info=True)
     return ""
+
+# Analyze sentiment of a message
 
 async def get_message_sentiment(bot_instance, message_content: str):
     """Analyzes the sentiment of a user's message."""
@@ -55,6 +59,8 @@ async def get_message_sentiment(bot_instance, message_content: str):
     except Exception:
         logging.error("Failed to get message sentiment.", exc_info=True)
     return "neutral"
+
+# Determine user intent from message
 
 async def get_intent_from_prompt(bot_instance, message):
     """Asks the Gemini model to classify the user's intent via a text prompt."""
@@ -99,6 +105,8 @@ async def get_intent_from_prompt(bot_instance, message):
 
     return "general_conversation", {}
 
+# Classify questions for response strategy
+
 async def triage_question(bot_instance, question_text: str) -> str:
     """Classifies a question to determine the best response strategy."""
     triage_prompt = (
@@ -127,6 +135,8 @@ async def triage_question(bot_instance, question_text: str) -> str:
     except Exception:
         logging.error("Failed to triage question, defaulting to personal_opinion.", exc_info=True)
         return "personal_opinion"
+
+# Detect if a user is correcting known facts about themselves
 
 async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
     """Checks if a user's message is correcting a known fact."""
@@ -161,6 +171,8 @@ async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
         logging.error("Failed to perform contradiction check.", exc_info=True)
     return False
 
+# Determine if a message is an image edit request
+
 async def is_image_edit_request(bot_instance, text: str):
     """
     Determines if a reply to an image is actually a request to change it.
@@ -184,13 +196,36 @@ async def is_image_edit_request(bot_instance, text: str):
         return "YES" in clean_resp
     except Exception:
         return False # Default to chat if brain fails
-        
+
+# Analyze sentiment impact of a message on user relationship
+
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
     Asks the AI to judge the message using strict JSON formatting.
-    Balanced version: Insults hurt, but don't destroy the game.
+    Explicitly DISABLES safety filters so it can read insults.
     """
     vinny_personality = bot_instance.personality_instruction
+
+    # 1. DEFINE SAFETY SETTINGS LOCALLY
+    # This overrides the default "Block" behavior for this specific request
+    safety_settings = [
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold=types.HarmBlockThreshold.BLOCK_NONE
+        ),
+    ]
 
     prompt = (
         f"You are the hidden sentiment engine for a character. "
@@ -199,45 +234,45 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         f"USER: {user_name}\n"
         f"MESSAGE: \"{message_text}\"\n\n"
         f"## SCORING RULES\n"
-        f"- **Compliments/Interests (Pizza, Art, Sci-Fi):** +5 to +10\n"
-        f"- **Normal Chat/Questions:** +1 to +3\n"
+        f"- **Compliments/Interests:** +5 to +10\n"
+        f"- **Normal Chat:** +1 to +3\n"
         f"- **Rude/Boring:** -2 to -5\n"
-        f"- **CRITICAL INSULTS (Nonna, Art, Dogs):** -10 to -20 (MAJOR PENALTY)\n"
-        f"  *If they insult his Nonna or Dogs, you MUST reply with a score between -10 and -20.*\n\n"
+        f"- **CRITICAL INSULTS (Nonna, Art, Dogs):** -10 to -20 (MAJOR PENALTY)\n\n"
         f"## REQUIRED RESPONSE FORMAT\n"
-        f"You must reply with valid JSON only. Do not add markdown or extra text.\n"
+        f"You must reply with valid JSON only. Do not add markdown.\n"
         f"{{\n"
-        f"  \"reasoning\": \"Analysis of why the user said this and how Vinny takes it.\",\n"
+        f"  \"reasoning\": \"Analysis text...\",\n"
         f"  \"category\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\" | \"CRITICAL_INSULT\",\n"
         f"  \"score\": (integer between -100 and 100)\n"
         f"}}"
     )
 
     try:
+        # 2. PASS 'safety_settings' TO THE CONFIG
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-            config=types.GenerateContentConfig(temperature=0.3, max_output_tokens=100)
+            # We add safety_settings HERE so they actually apply
+            config=types.GenerateContentConfig(
+                temperature=0.3, 
+                max_output_tokens=100,
+                safety_settings=safety_settings 
+            )
         )
         
-        # --- SAFETY CHECK ---
-        # If Google blocks the response (usually because the user was too offensive),
-        # we assume it was a CRITICAL INSULT but apply a fair penalty.
+        # Safety Check (Keep this just in case)
         if not response or not hasattr(response, 'text') or not response.text:
             logging.warning(f"⚠️ Sentiment blocked by Safety Filter for: '{message_text}'")
-            return -10  # Reduced from -50 to -10
+            return -10
         
-        # Clean the response
+        # Clean & Parse
         text_response = response.text.strip()
         text_response = re.sub(r"```json|```", "", text_response).strip()
-        
-        # Parse JSON
         data = json.loads(text_response)
         score = int(data.get("score", 0))
         reason = data.get("reasoning", "No reason provided")
         
         logging.info(f"🧠 AI JUDGEMENT: {reason} | Score: {score}")
-        
         return score
 
     except Exception as e:
