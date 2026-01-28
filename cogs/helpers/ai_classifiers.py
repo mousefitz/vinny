@@ -4,10 +4,10 @@ import logging
 from google.genai import types
 
 # --- GLOBAL SAFETY SETTINGS ---
-
+# Use "OFF" for Gemini 2.5 Flash compatibility
 SAFETY_SETTINGS = [
     types.SafetySetting(
-        category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE
+        category=cat, threshold="OFF"
     )
     for cat in [
         types.HarmCategory.HARM_CATEGORY_HARASSMENT,

@@ -91,10 +91,14 @@ class VinnyBot(commands.Bot):
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 50
         
-        # --- Harm Categories ---
+        # --- Harm Categories (UPDATED FOR GEMINI 2.5) ---
+        # "BLOCK_NONE" is invalid for 2.5 Flash and causes API crashes.
+        # We must use "OFF" (or the SDK equivalent) to disable filters.
         safety_settings_list = [
             types.SafetySetting(
-                category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE
+                category=cat, 
+                # "OFF" is the correct setting for 2.5 Flash models
+                threshold="OFF" 
             )
             for cat in [
                 types.HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -106,7 +110,6 @@ class VinnyBot(commands.Bot):
         
         self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(
             safety_settings=safety_settings_list,
-            #max_output_tokens=5000
             temperature=0.8
         )
     
