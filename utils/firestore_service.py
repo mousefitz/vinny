@@ -371,3 +371,47 @@ class FirestoreService:
         except Exception:
             logging.error(f"Failed to process divorce for '{user1_id}'", exc_info=True)
             return False
+    
+    async def get_cost_summary(self):
+        """
+        Calculates total API costs and breakdown by model.
+        Returns a dictionary with 'total_cost' and 'model_breakdown'.
+        """
+        if not self.db:
+            return {"total_cost": 0.0, "model_breakdown": {}}
+
+        try:
+            # Helper function to calculate stats in background thread
+            def calculate_stats():
+                total_cost = 0.0
+                model_breakdown = {}
+                
+                # Assuming you store daily/monthly stats in a 'usage_stats' or 'bot_stats' collection
+                # If you don't have a specific collection yet, we return 0 to prevent crashes.
+                # Adjust 'bot_stats' to whatever collection name you actually use for tracking.
+                try:
+                    stats_ref = self.db.collection('bot_stats').document('global_usage')
+                    doc = stats_ref.get()
+                    
+                    if doc.exists:
+                        data = doc.to_dict()
+                        total_cost = data.get('total_cost', 0.0)
+                        model_breakdown = data.get('model_breakdown', {})
+                    else:
+                        # Fallback: If you track per-user, this would be a heavier query.
+                        # For now, returning safe defaults is better than crashing.
+                        pass
+                except Exception:
+                    pass
+
+                return {
+                    "total_cost": total_cost,
+                    "model_breakdown": model_breakdown
+                }
+
+            # Run in executor to avoid blocking the bot
+            return await self.loop.run_in_executor(None, calculate_stats)
+
+        except Exception as e:
+            logging.error(f"Failed to get cost summary: {e}")
+            return {"total_cost": 0.0, "model_breakdown": {}}
