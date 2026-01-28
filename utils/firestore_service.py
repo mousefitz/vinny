@@ -374,44 +374,40 @@ class FirestoreService:
     
     async def get_cost_summary(self):
         """
-        Calculates total API costs and breakdown by model.
-        Returns a dictionary with 'total_cost' and 'model_breakdown'.
+        Retrieves cost stats for Today, Week, Month, and All-Time.
+        Matches the paths used in update_usage_stats.
         """
-        if not self.db:
-            return {"total_cost": 0.0, "model_breakdown": {}}
+        if not self.db: return {}
+        
+        # 1. Calculate Dates (To know which docs to fetch)
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        year, week, day = now.isocalendar()
+        week_str = f"{year}-W{week:02d}"
+        month_str = now.strftime("%Y-%m")
+        
+        # 2. Define the EXACT Paths used in update_usage_stats
+        base_path = constants.get_bot_state_collection_path(self.APP_ID)
+        stats_root = self.db.collection(base_path).document("usage_stats")
 
-        try:
-            # Helper function to calculate stats in background thread
-            def calculate_stats():
-                total_cost = 0.0
-                model_breakdown = {}
-                
-                # Assuming you store daily/monthly stats in a 'usage_stats' or 'bot_stats' collection
-                # If you don't have a specific collection yet, we return 0 to prevent crashes.
-                # Adjust 'bot_stats' to whatever collection name you actually use for tracking.
-                try:
-                    stats_ref = self.db.collection('bot_stats').document('global_usage')
-                    doc = stats_ref.get()
-                    
-                    if doc.exists:
-                        data = doc.to_dict()
-                        total_cost = data.get('total_cost', 0.0)
-                        model_breakdown = data.get('model_breakdown', {})
-                    else:
-                        # Fallback: If you track per-user, this would be a heavier query.
-                        # For now, returning safe defaults is better than crashing.
-                        pass
-                except Exception:
-                    pass
+        # 3. Helper to fetch data safely without crashing
+        async def fetch_doc(doc_ref):
+            try:
+                doc = await self.loop.run_in_executor(None, doc_ref.get)
+                return doc.to_dict() if doc.exists else {}
+            except Exception:
+                return {}
 
-                return {
-                    "total_cost": total_cost,
-                    "model_breakdown": model_breakdown
-                }
+        # 4. Fetch All 4 Timeframes
+        daily_data = await fetch_doc(stats_root.collection("daily_stats").document(date_str))
+        weekly_data = await fetch_doc(stats_root.collection("weekly_stats").document(week_str))
+        monthly_data = await fetch_doc(stats_root.collection("monthly_stats").document(month_str))
+        total_data = await fetch_doc(stats_root) # Grand total is stored on the root doc
 
-            # Run in executor to avoid blocking the bot
-            return await self.loop.run_in_executor(None, calculate_stats)
-
-        except Exception as e:
-            logging.error(f"Failed to get cost summary: {e}")
-            return {"total_cost": 0.0, "model_breakdown": {}}
+        return {
+            "daily": daily_data,
+            "weekly": weekly_data,
+            "monthly": monthly_data,
+            "total": total_data,
+            "meta": {"date": date_str}
+        }

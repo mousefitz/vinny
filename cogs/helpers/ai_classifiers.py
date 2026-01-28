@@ -188,9 +188,8 @@ async def is_image_edit_request(bot_instance, text: str):
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
     Asks the AI to judge the message based on Vinny's full personality.
-    Returns: Integer (Negative or Positive, NEVER Zero)
+    Returns: Integer (Negative or Positive)
     """
-    # We grab Vinny's core personality directly from the bot
     vinny_personality = bot_instance.personality_instruction
 
     prompt = (
@@ -199,32 +198,35 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         f"The user '{user_name}' just said this to him:\n"
         f"\"{message_text}\"\n\n"
         f"## TASK: Rate the impact on their relationship (Scale: -100 to +100).\n"
-        f"There is NO neutral. Every interaction matters.\n\n"
-        f"## BALANCED SCORING GUIDE:\n"
-        f"1. **NORMAL CHAT (+1):** Standard interaction, asking questions, or just hanging out. This is the slow, steady build of friendship.\n"
-        f"2. **HIGH POSITIVE (+2 to +5):** Feeding his ego, flirting, complimenting his art/beard, or shared excitement about pizza/rum.\n"
-        f"3. **NEGATIVE (-2 to -5):** Being rude, boring, dismissive, or mentioning things he hates (Ohio, authority, sobriety).\n"
-        f"4. **SEVERE NEGATIVE (-10 to -15):** Insulting his ART, his DOGS, or his NONNA. This is a major blow, but not instant hatred.\n\n"
-        f"Reply ONLY with a single non-zero integer."
+        f"Interacting naturally usually builds the bond (+1), but insults damage it (-5 to -20).\n\n"
+        f"## SCORING GUIDE:\n"
+        f"1. **NORMAL (+1):** Friendly chat, questions, hanging out.\n"
+        f"2. **GOOD (+3 to +5):** Flattery, shared interests (pizza/art/rum), or ego-boosting.\n"
+        f"3. **BAD (-5 to -10):** Rude, boring, or mentioning hates (Ohio, authority).\n"
+        f"4. **TERRIBLE (-20 to -50):** Insulting his ART, DOGS, or NONNA.\n\n"
+        f"## FORMAT:\n"
+        f"Provide a short reasoning, then the score.\n"
+        f"Example: \"Insulted Nonna, unforgivable. SCORE: -50\"\n"
+        f"Example: \"Asked about paint, friendly. SCORE: 2\""
     )
 
     try:
-        # We use a slightly higher temperature (0.4) so he can pick up on nuance/sarcasm
+        # Increased tokens to 60 to allow for the reasoning sentence
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-            config=types.GenerateContentConfig(temperature=0.4, max_output_tokens=5)
+            config=types.GenerateContentConfig(temperature=0.4, max_output_tokens=60)
         )
         
-        # Extract number
+        # Regex to find the LAST number in the string (The Score)
+        # This ignores numbers in the reasoning text
         import re
-        match = re.search(r'-?\d+', response.text.strip())
-        if match:
-            score = int(match.group())
-            # Failsafe: If AI stubbornly returns 0, force it to +1 (Benefit of the doubt)
-            return 1 if score == 0 else score
+        matches = re.findall(r'-?\d+', response.text.strip())
+        if matches:
+            score = int(matches[-1]) # Take the last number found (the score)
+            return score
             
-        return 1 # Default to small positive if parsing fails
+        return 1 # Default to +1 only if the AI crashes/fails to output a number
         
     except Exception:
-        return 1 # Default to small positive if error
+        return 1
