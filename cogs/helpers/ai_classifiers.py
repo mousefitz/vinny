@@ -3,7 +3,21 @@ import re
 import logging
 from google.genai import types
 
-# Summarize recent conversation context
+# --- GLOBAL SAFETY SETTINGS ---
+
+SAFETY_SETTINGS = [
+    types.SafetySetting(
+        category=cat, threshold=types.HarmBlockThreshold.BLOCK_NONE
+    )
+    for cat in [
+        types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+        types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+        types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+        types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+    ]
+]
+
+### Short-Term Summary
 
 async def get_short_term_summary(bot_instance, message_history: list):
     """Summarizes the last few messages to find the current topic."""
@@ -18,7 +32,8 @@ async def get_short_term_summary(bot_instance, message_history: list):
     try:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
-            contents=[summary_prompt]
+            contents=[summary_prompt],
+            config=types.GenerateContentConfig(safety_settings=SAFETY_SETTINGS)
         )
         if response:
             return response.text.strip()
@@ -26,7 +41,7 @@ async def get_short_term_summary(bot_instance, message_history: list):
         logging.error("Failed to generate short-term summary.", exc_info=True)
     return ""
 
-# Analyze sentiment of a message
+### Sentiment Classification
 
 async def get_message_sentiment(bot_instance, message_content: str):
     """Analyzes the sentiment of a user's message."""
@@ -45,7 +60,8 @@ async def get_message_sentiment(bot_instance, message_content: str):
     try:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
-            contents=[sentiment_prompt]
+            contents=[sentiment_prompt],
+            config=types.GenerateContentConfig(safety_settings=SAFETY_SETTINGS)
         )
         if not response:
             logging.error("Failed to get message sentiment (API call aborted or failed).")
@@ -60,7 +76,7 @@ async def get_message_sentiment(bot_instance, message_content: str):
         logging.error("Failed to get message sentiment.", exc_info=True)
     return "neutral"
 
-# Determine user intent from message
+## Intent Classification
 
 async def get_intent_from_prompt(bot_instance, message):
     """Asks the Gemini model to classify the user's intent via a text prompt."""
@@ -85,7 +101,10 @@ async def get_intent_from_prompt(bot_instance, message):
     )
     
     try:
-        json_config = types.GenerateContentConfig(response_mime_type="application/json")
+        json_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            safety_settings=SAFETY_SETTINGS
+        )
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[intent_prompt],
@@ -105,7 +124,7 @@ async def get_intent_from_prompt(bot_instance, message):
 
     return "general_conversation", {}
 
-# Classify questions for response strategy
+## Question Triage
 
 async def triage_question(bot_instance, question_text: str) -> str:
     """Classifies a question to determine the best response strategy."""
@@ -123,7 +142,10 @@ async def triage_question(bot_instance, question_text: str) -> str:
         f"\"{question_text}\""
     )
     try:
-        json_config = types.GenerateContentConfig(response_mime_type="application/json")
+        json_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            safety_settings=SAFETY_SETTINGS
+        )
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME, contents=[triage_prompt], config=json_config
         )
@@ -136,7 +158,7 @@ async def triage_question(bot_instance, question_text: str) -> str:
         logging.error("Failed to triage question, defaulting to personal_opinion.", exc_info=True)
         return "personal_opinion"
 
-# Detect if a user is correcting known facts about themselves
+## Correction Detection
 
 async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
     """Checks if a user's message is correcting a known fact."""
@@ -159,10 +181,13 @@ async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
         f"Known Facts: \"{known_facts}\"\nUser Message: \"{message.content}\""
     )
     try:
+        # Use a safe config with our custom settings
+        safe_config = types.GenerateContentConfig(safety_settings=SAFETY_SETTINGS)
+        
         response = await bot_instance.gemini_client.aio.models.generate_content(
             model=bot_instance.MODEL_NAME, 
             contents=[contradiction_check_prompt], 
-            config=text_gen_config
+            config=safe_config
         )
         if "yes" in response.text.lower():
             logging.info(f"Correction detected for user {message.author.display_name}. Message: '{message.content}'")
@@ -171,7 +196,7 @@ async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
         logging.error("Failed to perform contradiction check.", exc_info=True)
     return False
 
-# Determine if a message is an image edit request
+## Image Edit Request Detection
 
 async def is_image_edit_request(bot_instance, text: str):
     """
@@ -190,42 +215,24 @@ async def is_image_edit_request(bot_instance, text: str):
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[prompt],
-            config=types.GenerateContentConfig(temperature=0.0) # Zero temp for strict logic
+            config=types.GenerateContentConfig(
+                temperature=0.0
+                # NO SAFETY SETTINGS HERE (As requested for image logic)
+            ) 
         )
         clean_resp = response.text.strip().upper()
         return "YES" in clean_resp
     except Exception:
-        return False # Default to chat if brain fails
+        return False
 
-# Analyze sentiment impact of a message on user relationship
+## Sentiment Impact Analysis
 
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
-    Asks the AI to judge the message using strict JSON formatting.
-    Explicitly DISABLES safety filters so it can read insults.
+    Asks the AI to judge the message.
+    Uses strict JSON formatting and safety settings to allow insults to be judged.
     """
     vinny_personality = bot_instance.personality_instruction
-
-    # 1. DEFINE SAFETY SETTINGS LOCALLY
-    # This overrides the default "Block" behavior for this specific request
-    safety_settings = [
-        types.SafetySetting(
-            category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-            threshold=types.HarmBlockThreshold.BLOCK_NONE
-        ),
-        types.SafetySetting(
-            category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-            threshold=types.HarmBlockThreshold.BLOCK_NONE
-        ),
-        types.SafetySetting(
-            category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-            threshold=types.HarmBlockThreshold.BLOCK_NONE
-        ),
-        types.SafetySetting(
-            category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-            threshold=types.HarmBlockThreshold.BLOCK_NONE
-        ),
-    ]
 
     prompt = (
         f"You are the hidden sentiment engine for a character. "
@@ -248,26 +255,29 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
     )
 
     try:
-        # 2. PASS 'safety_settings' TO THE CONFIG
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
-            # We add safety_settings HERE so they actually apply
             config=types.GenerateContentConfig(
                 temperature=0.3, 
                 max_output_tokens=100,
-                safety_settings=safety_settings 
+                safety_settings=SAFETY_SETTINGS
             )
         )
         
-        # --- FIX: INNOCENT UNTIL PROVEN GUILTY ---
-        # If Google blocks the response, we assume it was a False Positive (like 'lashing out').
-        # We return 1 (Small Positive) or 0 (Neutral) to be safe.
-        if not response or not hasattr(response, 'text') or not response.text:
-            logging.warning(f"⚠️ Sentiment blocked by Safety Filter for: '{message_text}' - Defaulting to Neutral.")
-            return 0  # <--- CHANGED FROM -10 TO 0
+        # --- API Crash / Permission Check ---
+        # If response is None, the API likely rejected the settings
+        if response is None:
+            logging.warning(f"⚠️ API Error for: '{message_text}'")
+            return 1 # Default to +1 (Benefit of the doubt)
+
+        # --- Safety Filter Check ---
+        # If Google blocked it anyway, we return 1 to avoid punishing compliments
+        if not hasattr(response, 'text') or not response.text:
+            logging.warning(f"⚠️ Content Blocked (Safety) for: '{message_text}'")
+            return 1 
         
-        # Clean & Parse
+        # --- Success ---
         text_response = response.text.strip()
         text_response = re.sub(r"```json|```", "", text_response).strip()
         data = json.loads(text_response)
@@ -279,5 +289,4 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
 
     except Exception as e:
         logging.error(f"Sentiment Analysis Failed: {e}")
-        return 0
-
+        return 1
