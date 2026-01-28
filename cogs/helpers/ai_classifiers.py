@@ -260,7 +260,6 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
             config=types.GenerateContentConfig(
                 temperature=0.3, 
-                max_output_tokens=100,
                 safety_settings=SAFETY_SETTINGS
             )
         )
