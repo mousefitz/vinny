@@ -175,7 +175,32 @@ class VinnyLogic(commands.Cog):
                         if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
                     elif intent == "generate_user_portrait": 
-                        await image_tasks.handle_paint_me_request(self.bot, message)
+                        target_name = args.get("target", "me")
+                        details = args.get("details", "")
+                        
+                        target_user = None
+
+                        # 1. Check for Mentions (Highest Priority)
+                        if message.mentions:
+                            target_user = message.mentions[0]
+
+                        # 2. Check for "Me" / "Myself"
+                        elif target_name.lower() in ["me", "myself", "i"]:
+                            target_user = message.author
+
+                        # 3. Search by Name (Fuzzy Match)
+                        elif message.guild:
+                            # Search Display Names (Nicknames) first, then Usernames
+                            target_user = discord.utils.find(lambda m: target_name.lower() in m.display_name.lower(), message.guild.members)
+                            if not target_user:
+                                target_user = discord.utils.find(lambda m: target_name.lower() in m.name.lower(), message.guild.members)
+
+                        # 4. Handle Not Found
+                        if not target_user:
+                            await message.channel.send(f"who's '{target_name}'? never heard of 'em. try taggin' them.")
+                        else:
+                            # Pass the FOUND user and the DETAILS to the image task
+                            await image_tasks.handle_portrait_request(self.bot, message, target_user, details)
 
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user", "")
