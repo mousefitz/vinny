@@ -317,25 +317,48 @@ class VinnyLogic(commands.Cog):
 
     @tasks.loop(minutes=30)
     async def memory_scheduler(self):
+        """Run summary logic only for channels that had activity in the last 30 mins."""
         await self.bot.wait_until_ready()
         logging.info("Memory scheduler starting...")
+        
         for guild in self.bot.guilds:
             messages = []
             for channel in guild.text_channels:
-                if channel.permissions_for(guild.me).read_message_history:
-                    try:
-                        since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)
-                        async for message in channel.history(limit=100, after=since):
-                            if not message.author.bot:
-                                messages.append({"author": message.author.display_name, "content": message.content, "timestamp": message.created_at.isoformat()})
-                    except discord.Forbidden: continue
-                    except Exception as e: logging.error(f"Could not fetch history for channel '{channel.name}': {e}")
+                if not channel.permissions_for(guild.me).read_message_history:
+                    continue
+
+                try:
+                    # 1. OPTIMIZATION: Check strict recency first to avoid API spam
+                    # Fetch just 1 message to check activity
+                    last_msg = None
+                    async for m in channel.history(limit=1):
+                        last_msg = m
+                        break
+                    
+                    if not last_msg:
+                        continue # Empty channel
+
+                    # Check time difference (30 mins)
+                    time_diff = datetime.datetime.now(datetime.UTC) - last_msg.created_at
+                    if time_diff > datetime.timedelta(minutes=30):
+                        continue # No recent activity, skip fetching history
+                    
+                    # 2. If recent, fetch full history for summary
+                    since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)
+                    async for message in channel.history(limit=100, after=since):
+                        if not message.author.bot:
+                            messages.append({"author": message.author.display_name, "content": message.content, "timestamp": message.created_at.isoformat()})
+                
+                except discord.Forbidden: continue
+                except Exception as e: logging.error(f"Could not fetch history for channel '{channel.name}': {e}")
+            
             if len(messages) > 5:
                 logging.info(f"Generating summary for guild '{guild.name}' with {len(messages)} messages.")
                 messages.sort(key=lambda x: x['timestamp'])
                 if summary_data := await conversation_tasks.generate_memory_summary(self.bot, messages):
                     await self.bot.firestore_service.save_memory(str(guild.id), summary_data)
                     logging.info(f"Saved memory summary for guild '{guild.name}'.")
+                    
         logging.info("Memory scheduler finished.")
 
     # --- BOT COMMANDS ---
@@ -622,7 +645,7 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='vibe')
     async def vibe_command(self, ctx, member: discord.Member = None):
         """
-        Checks Vinny's opinion of you using the EXPANDED Tier System.
+        Checks Vinny's opinion of you using the Centralized Tier System.
         """
         target_user = member or ctx.author
         user_id = str(target_user.id)
@@ -638,42 +661,12 @@ class VinnyLogic(commands.Cog):
 
         rel_score = profile.get("relationship_score", 0)
         
-        # 2. FORCE RE-CALCULATE STATUS (Expanded Tiers)
-        if rel_score >= 500: rel_status = "obsessed"       # NEW GOD TIER
-        elif rel_score >= 200: rel_status = "soulmate"     # NEW HIGH TIER
-        elif rel_score >= 100: rel_status = "family"       # NEW HIGH TIER
-        elif rel_score >= 60: rel_status = "bestie"
-        elif rel_score >= 25: rel_status = "friend"
-        elif rel_score >= 10: rel_status = "chill"
-        elif rel_score >= -10: rel_status = "neutral"
-        elif rel_score >= -25: rel_status = "annoyance"
-        elif rel_score >= -60: rel_status = "sketchy"
-        elif rel_score >= -100: rel_status = "enemy"
-        elif rel_score >= -200: rel_status = "nemesis"
-        elif rel_score >= -500: rel_status = "arch-nemesis" # NEW LOW TIER
-        else: rel_status = "dead to me"                     # NEW LOW TIER
+        # 2. USE CENTRALIZED STATUS LOGIC
+        rel_status, embed_color = constants.get_relationship_status(rel_score)
 
-        # 3. Get Mood & Color
+        # 3. Get Mood
         mood = self.bot.current_mood
         
-        color_map = {
-            "obsessed":     discord.Color.from_rgb(255, 105, 180), # Hot Pink
-            "soulmate":     discord.Color.from_rgb(255, 215, 0),   # Gold
-            "family":       discord.Color.purple(),
-            "bestie":       discord.Color.dark_purple(),
-            "friend":       discord.Color.green(),
-            "chill":        discord.Color.teal(),
-            "neutral":      discord.Color.dark_magenta(),
-            "annoyance":    discord.Color.orange(),
-            "sketchy":      discord.Color.dark_orange(),
-            "enemy":        discord.Color.red(),
-            "nemesis":      discord.Color.dark_red(),
-            "arch-nemesis": discord.Color.from_rgb(50, 0, 0),      # Blood Red
-            "dead to me":   discord.Color.default()                # Black/Grey
-        }
-        embed_color = color_map.get(rel_status, discord.Color.dark_magenta())
-
-        # ... (Rest of the command remains the same) ...
         # 4. Generate Comment
         prompt = (
             f"{self.bot.personality_instruction}\n\n"

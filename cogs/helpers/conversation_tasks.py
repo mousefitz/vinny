@@ -5,6 +5,8 @@ import json
 import discord
 from google.genai import types
 from . import ai_classifiers, utilities
+# ADDED IMPORT
+from utils import constants
 
 async def handle_direct_reply(bot_instance, message: discord.Message):
     """Handles a direct reply (via reply or mention) to one of the bot's messages."""
@@ -501,31 +503,8 @@ async def generate_memory_summary(bot_instance, messages):
 
 async def update_relationship_status(bot_instance, user_id: str, guild_id: str | None, new_score: float):
     """Determines a user's relationship status based on their score."""
-    # New Granular Thresholds (Checked from top down)
-    thresholds = {
-        "worshipped": 90,
-        "bestie": 60,
-        "friend": 25,
-        "chill": 10,
-        "neutral": -10,      # Anything between -10 and 10 falls here implicitly
-        "annoyance": -25,    # -11 to -25
-        "sketchy": -59,      # -26 to -59
-        "enemy": -89,        # -60 to -89
-        "nemesis": -100      # -90 and below
-    }
-
-    new_status = "neutral"
-    
-    # Logic: Check highest positive first, then work down to negatives
-    if new_score >= thresholds["worshipped"]: new_status = "worshipped"
-    elif new_score >= thresholds["bestie"]: new_status = "bestie"
-    elif new_score >= thresholds["friend"]: new_status = "friend"
-    elif new_score >= thresholds["chill"]: new_status = "chill"
-    elif new_score >= thresholds["neutral"]: new_status = "neutral" # -10 to 9
-    elif new_score > thresholds["sketchy"]: new_status = "annoyance" # -11 to -25
-    elif new_score > thresholds["enemy"]: new_status = "sketchy"     # -26 to -59
-    elif new_score > thresholds["nemesis"]: new_status = "enemy"     # -60 to -89
-    else: new_status = "nemesis"                                     # -90 or lower
+    # Use Centralized Logic
+    new_status, _ = constants.get_relationship_status(new_score)
         
     current_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
     current_status = current_profile.get("relationship_status", "neutral")

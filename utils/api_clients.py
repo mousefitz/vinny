@@ -79,10 +79,12 @@ async def geocode_location(http_session: aiohttp.ClientSession, api_key: str, lo
     is_zip = location.isdigit() and len(location) == 5
     
     if is_zip:
-        base_url = "http://api.openweathermap.org/geo/1.0/zip"
+        # UPDATED: Use HTTPS
+        base_url = "https://api.openweathermap.org/geo/1.0/zip"
         params["zip"] = f"{location},US"
     else:
-        base_url = "http://api.openweathermap.org/geo/1.0/direct"
+        # UPDATED: Use HTTPS
+        base_url = "https://api.openweathermap.org/geo/1.0/direct"
         params["q"] = location
 
     try:
@@ -100,7 +102,8 @@ async def get_weather_data(http_session: aiohttp.ClientSession, api_key: str, la
     if not api_key: return None
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": "imperial"}
     try:
-        async with http_session.get("http://api.openweathermap.org/data/2.5/weather", params=params) as response:
+        # UPDATED: Use HTTPS
+        async with http_session.get("https://api.openweathermap.org/data/2.5/weather", params=params) as response:
             if response.status == 200:
                 return await response.json()
     except Exception:
@@ -111,6 +114,7 @@ async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, 
     if not api_key: return None
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": "imperial"}
     try:
+        # UPDATED: Use HTTPS
         url = "https://api.openweathermap.org/data/2.5/forecast"
         async with http_session.get(url, params=params) as response:
             if response.status == 200:

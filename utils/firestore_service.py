@@ -34,22 +34,17 @@ class FirestoreService:
             logging.error("Failed to initialize Firebase from Base64 credentials.", exc_info=True)
             return None
 
-    # --- LEDGER & COST TRACKING (FIXED) ---
+    # --- LEDGER & COST TRACKING ---
 
     async def update_usage_stats(self, date_str: str, increments: dict):
-        """
-        Updates Daily, Weekly, Monthly, and All-Time stats atomically using Increments.
-        increments: {"images": 1, "cost": 0.04, "text_requests": 1, "tokens": 500}
-        """
+        """Updates Daily, Weekly, Monthly, and All-Time stats atomically using Increments."""
         if not self.db: return
         
-        # 1. Calculate Timeframes
         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
         year, week, day = dt.isocalendar()
         week_str = f"{year}-W{week:02d}"
         month_str = dt.strftime("%Y-%m")
         
-        # 2. Define Document Paths
         base_path = constants.get_bot_state_collection_path(self.APP_ID)
         stats_root = self.db.collection(base_path).document("usage_stats")
         
@@ -60,18 +55,14 @@ class FirestoreService:
             stats_root # Grand Total
         ]
 
-        # 3. Batch Write with Atomic Increments
-        # This avoids "contention" because we don't need to read the doc first.
         try:
             batch = self.db.batch()
-            
             update_data = {
                 "images": firestore.Increment(increments.get("images", 0)),
                 "text_requests": firestore.Increment(increments.get("text_requests", 0)),
                 "tokens": firestore.Increment(increments.get("tokens", 0)),
                 "estimated_cost": firestore.Increment(increments.get("cost", 0.0))
             }
-            
             for ref in refs:
                 batch.set(ref, update_data, merge=True)
 
@@ -113,7 +104,7 @@ class FirestoreService:
             logging.error(f"Failed to delete documents from '{collection_path}'", exc_info=True)
             return False
 
-    # --- USER PROFILE METHODS (CORRECTED & COMPLETE) ---
+    # --- USER PROFILE METHODS ---
 
     async def save_user_profile_fact(self, user_id: str, guild_id: str | None, key: str, value: str):
         if not self.db: return False
@@ -122,14 +113,10 @@ class FirestoreService:
         doc_ref = self.db.collection(collection_path).document(user_id)
         
         try:
-            # 1. Write to DB
             await self.loop.run_in_executor(None, lambda: doc_ref.set({key: value}, merge=True))
-            
-            # 2. Clear Cache AFTER successful write
             cache_key = f"{user_id}_{guild_id}"
             if cache_key in self.profile_cache:
                 del self.profile_cache[cache_key]
-                
             return True
         except Exception:
             logging.error(f"Failed to save fact for user {user_id}", exc_info=True)
@@ -138,12 +125,10 @@ class FirestoreService:
     async def get_user_profile(self, user_id: str, guild_id: str | None) -> dict:
         if not self.db: return {}
         
-        # 1. Check Cache
         cache_key = f"{user_id}_{guild_id}"
         if cache_key in self.profile_cache:
             return self.profile_cache[cache_key]
             
-        # 2. Fetch from DB (if not in cache)
         global_path = constants.get_global_user_profiles_path(self.APP_ID)
         server_path = constants.get_user_profile_collection_path(self.APP_ID, guild_id) if guild_id else None
         
@@ -158,8 +143,6 @@ class FirestoreService:
             server_profile = server_doc.to_dict() if server_doc.exists else {}
             
         full_profile = global_profile | server_profile
-        
-        # 3. Update Cache
         self.profile_cache[cache_key] = full_profile
         return full_profile
 
@@ -168,12 +151,9 @@ class FirestoreService:
         try:
             path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
             await self.loop.run_in_executor(None, self.db.collection(path).document(user_id).delete)
-            
-            # Clear Cache
             cache_key = f"{user_id}_{guild_id}"
             if cache_key in self.profile_cache:
                 del self.profile_cache[cache_key]
-                
             return True
         except Exception:
             logging.error(f"Failed to delete profile for user '{user_id}' in guild '{guild_id}'", exc_info=True)
@@ -184,25 +164,18 @@ class FirestoreService:
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         profile_ref = self.db.collection(path).document(user_id)
         try:
-            # 1. Update DB
             await self.loop.run_in_executor(None, lambda: profile_ref.update({fact_key: firestore.DELETE_FIELD}))
-            
-            # 2. Clear Cache
             cache_key = f"{user_id}_{guild_id}"
             if cache_key in self.profile_cache:
                 del self.profile_cache[cache_key]
-                
             return True
         except Exception:
             logging.error(f"Failed to delete fact '{fact_key}' for user '{user_id}'", exc_info=True)
             return False
     
     async def get_all_user_ids_in_guild(self, guild_id: str):
-        """Fetches all user IDs associated with a guild."""
         if not self.db: return []
         try:
-            # Note: This checks the 'guilds/{id}/users' collection. 
-            # Ensure your bot writes to this collection elsewhere if you want this to work!
             users_ref = self.db.collection('guilds').document(str(guild_id)).collection('users')
             docs = users_ref.stream()
             return [doc.id for doc in docs]
@@ -210,56 +183,56 @@ class FirestoreService:
             logging.error(f"Failed to fetch all users for guild {guild_id}: {e}")
             return []
     
-    # --- RELATIONSHIP SCORE MANAGEMENT (CORRECTED) ---
+    # --- RELATIONSHIP SCORE MANAGEMENT (UPDATED: ATOMIC TRANSACTIONS) ---
 
     async def update_relationship_score(self, user_id: str, guild_id: str, sentiment_score: int):
         """
-        Updates a user's relationship score.
-        Expanded Range: -1000 to 1000.
+        Updates a user's relationship score atomically using a Transaction.
         """
         if not self.db: return 0
         
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         doc_ref = self.db.collection(path).document(user_id)
 
-        # Helper function to run in the background thread
-        def sync_update():
-            try:
-                # 1. READ current score
-                doc = doc_ref.get()
-                current_data = doc.to_dict() if doc.exists else {}
-                current_score = current_data.get("relationship_score", 0)
-                
-                # 2. CALCULATE new score
-                new_score = current_score + sentiment_score
-                
-                # --- UPDATED CLAMPING: Expanded to +/- 1000 ---
-                new_score = max(-1000, min(1000, new_score)) 
-                
-                new_score *= 0.999 # Very slow decay (0.1% per message) since points are harder to get
-                
-                # 3. WRITE back
-                doc_ref.set({"relationship_score": new_score}, merge=True)
-                return new_score
-            except Exception as e:
-                logging.error(f"❌ DB Update failed inside thread: {e}")
-                return None
-        
+        # Define the transactional operation
+        @firestore.transactional
+        def update_in_transaction(transaction, doc_ref, score_change):
+            snapshot = doc_ref.get(transaction=transaction)
+            current_data = snapshot.to_dict() if snapshot.exists else {}
+            current_score = current_data.get("relationship_score", 0)
+            
+            # Logic: Add, Clamp, Decay
+            new_score = current_score + score_change
+            new_score = max(-1000, min(1000, new_score)) 
+            new_score *= 0.999 
+            
+            transaction.set(doc_ref, {"relationship_score": new_score}, merge=True)
+            return new_score
+
         try:
-            new_score = await self.loop.run_in_executor(None, sync_update)
-            if new_score is not None:
-                cache_key = f"{user_id}_{guild_id}"
-                if cache_key in self.profile_cache:
-                    del self.profile_cache[cache_key]
-                logging.info(f"✅ Updated score for {user_id}: {new_score:.2f}")
-                return new_score
-            else:
-                return 0
+            # Run transaction in executor because Firestore client is blocking
+            transaction = self.db.transaction()
+            new_score = await self.loop.run_in_executor(
+                None, 
+                update_in_transaction, 
+                transaction, 
+                doc_ref, 
+                sentiment_score
+            )
+            
+            # Clear Cache
+            cache_key = f"{user_id}_{guild_id}"
+            if cache_key in self.profile_cache:
+                del self.profile_cache[cache_key]
+                
+            logging.info(f"✅ Atomic score update for {user_id}: {new_score:.2f}")
+            return new_score
+            
         except Exception:
-            logging.error(f"Failed to update relationship score for user '{user_id}'", exc_info=True)
+            logging.error(f"Failed to atomic update score for user '{user_id}'", exc_info=True)
             return 0
            
-# --- ADDITIONAL METHODS FOR NICKNAMES, MEMORIES, PROPOSALS, MARRIAGES, AND COST SUMMARY ---
+    # --- ADDITIONAL METHODS ---
         
     async def save_user_nickname(self, user_id: str, nickname: str):
         if not self.db: return False
@@ -375,24 +348,16 @@ class FirestoreService:
             return False
     
     async def get_cost_summary(self):
-        """
-        Retrieves cost stats for Today, Week, Month, and All-Time.
-        Matches the paths used in update_usage_stats.
-        """
         if not self.db: return {}
-        
-        # 1. Calculate Dates (To know which docs to fetch)
         now = datetime.datetime.now()
         date_str = now.strftime("%Y-%m-%d")
         year, week, day = now.isocalendar()
         week_str = f"{year}-W{week:02d}"
         month_str = now.strftime("%Y-%m")
         
-        # 2. Define the EXACT Paths used in update_usage_stats
         base_path = constants.get_bot_state_collection_path(self.APP_ID)
         stats_root = self.db.collection(base_path).document("usage_stats")
 
-        # 3. Helper to fetch data safely without crashing
         async def fetch_doc(doc_ref):
             try:
                 doc = await self.loop.run_in_executor(None, doc_ref.get)
@@ -400,11 +365,10 @@ class FirestoreService:
             except Exception:
                 return {}
 
-        # 4. Fetch All 4 Timeframes
         daily_data = await fetch_doc(stats_root.collection("daily_stats").document(date_str))
         weekly_data = await fetch_doc(stats_root.collection("weekly_stats").document(week_str))
         monthly_data = await fetch_doc(stats_root.collection("monthly_stats").document(month_str))
-        total_data = await fetch_doc(stats_root) # Grand total is stored on the root doc
+        total_data = await fetch_doc(stats_root)
 
         return {
             "daily": daily_data,
@@ -414,25 +378,17 @@ class FirestoreService:
             "meta": {"date": date_str}
         }
        
-# --- LEADERBOARD DATA FETCHING (NEW) ---
-
     async def get_leaderboard_data(self, guild_id: str, limit: int = 5):
-        """
-        Fetches the top and bottom users by relationship score for a specific guild.
-        Returns: (top_users_list, bottom_users_list)
-        """
         if not self.db: return [], []
         
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         collection_ref = self.db.collection(path)
         
         try:
-            # 1. Most Loved (Descending Order: 100 -> 0)
             top_query = collection_ref.order_by("relationship_score", direction=firestore.Query.DESCENDING).limit(limit)
             top_docs = await self.loop.run_in_executor(None, top_query.stream)
             top_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in top_docs]
             
-            # 2. Most Hated (Ascending Order: -100 -> 0)
             bottom_query = collection_ref.order_by("relationship_score", direction=firestore.Query.ASCENDING).limit(limit)
             bottom_docs = await self.loop.run_in_executor(None, bottom_query.stream)
             bottom_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in bottom_docs]

@@ -86,18 +86,16 @@ class VinnyBot(commands.Bot):
             sys.exit("Error: personality.txt not found.")
 
         # --- Bot State & Globals ---
-        self.MODEL_NAME = "gemini-2.5-flash-preview-09-2025"
+        # UPDATED: Use the specific model requested
+        self.MODEL_NAME = "gemini-2.5-flash"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 50
         
-        # --- Harm Categories (UPDATED FOR GEMINI 2.5) ---
-        # "BLOCK_NONE" is invalid for 2.5 Flash and causes API crashes.
-        # We must use "OFF" (or the SDK equivalent) to disable filters.
+        # --- Harm Categories ---
         safety_settings_list = [
             types.SafetySetting(
                 category=cat, 
-                # "OFF" is the correct setting for 2.5 Flash models
                 threshold="OFF" 
             )
             for cat in [
