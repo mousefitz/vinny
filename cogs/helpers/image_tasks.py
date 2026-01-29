@@ -70,39 +70,31 @@ async def handle_paint_me_request(bot_instance, message: discord.Message):
 
 async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
     """
-    Generates an image using Gemini to rewrite the prompt and Imagen 4 to paint it.
+    Generates an image using Gemini to rewrite the prompt.
+    NUCLEAR CONTEXT FIX: Forces AI to discard history unless explicitly asked to edit.
     """
     async with message.channel.typing():
         # 1. Rewriter Instruction
-        context_instruction = ""
+        context_block = ""
         if previous_prompt:
-            context_instruction = (
-                f"\n## CONTEXT (PREVIOUS PAINTING):\n"
-                f"The last thing you painted in this channel was: \"{previous_prompt}\".\n"
-                f"**CRITICAL DECISION - DO NOT MIX SUBJECTS:**\n"
-                f"1. **DEFAULT TO IGNORE:** Assume the User Request is a NEW idea unless they explicitly ask to edit (e.g. 'change X', 'add Y').\n"
-                f"2. **CONFLICT RESOLUTION:** If the Previous Subject was 'A Cat' and New Request is 'A Dog', draw ONLY A DOG.\n"
+            context_block = (
+                f"\n## HISTORY (OLD GARBAGE - IGNORE MOST OF THE TIME):\n"
+                f"The previous image was: \"{previous_prompt}\".\n"
+                f"**STRICT RULE:** Only use this history if the User Request contains EDIT keywords "
+                f"(e.g., 'change', 'add', 'remove', 'make it', 'fix', 'turn him into').\n"
+                f"**OTHERWISE: THROW THIS HISTORY AWAY AND START FRESH.**\n"
             )
 
         prompt_rewriter_instruction = (
-            "You are an AI Art Director. Your goal is to refine user requests into detailed image generation prompts.\n\n"
-            "## CRITICAL MEMORY PROTOCOL:\n"
-            f"{context_instruction}\n"
+            "You are an AI Art Director. Refine the user's request into an image prompt.\n\n"
+            f"{context_block}\n"
             "## REFERENCE GUIDE:\n"
-            f"1. **THE USER:** '{message.author.display_name}'. If they say 'me', use a generic person suitable for them (unless the prompt already describes them).\n"
+            f"1. **THE USER:** '{message.author.display_name}'.\n"
             f"2. **VINNY (YOU):** Robust middle-aged Italian-American man, long dark hair, beard, pirate coat.\n\n"
-            "## CONTRADICTION OVERRIDE PROTOCOL (IMPORTANT):\n"
-            "If the User Request contradicts the Context (or the Input Description), the **REQUEST WINS**.\n"
-            "- **Example:** Input says 'Person with blonde hair', Request says 'Make them bald'.\n"
-            "- **Bad Output:** 'A person with blonde hair who is bald.' (Contradiction)\n"
-            "- **Correct Output:** 'A bald person.' (DELETE the blonde hair).\n\n"
-            "## VISUAL STYLE RULES:\n"
-            "1. **PRESERVE INTENT:** If the user specifies a style (e.g. 'anime', 'oil', 'sketch'), LOCK IT IN.\n"
-            "2. **ADAPTIVE ENHANCEMENT:** Do NOT default to 'cinematic' or '4k'. Use boosters that FIT the style:\n"
-            "   - If 'Anime' -> 'high quality animation, vibrant, studio ghibli style'.\n"
-            "   - If 'Photo' -> '4k, realistic texture, cinematic lighting'.\n"
-            "   - If 'Oil Painting' -> 'detailed brushstrokes, texture, masterpiece'.\n"
-            "3. **NO REPETITION:** Do not use the same lighting or color palette twice in a row.\n\n"
+            "## CRITICAL INSTRUCTIONS:\n"
+            "1. **NEW SUBJECT = NEW PROMPT:** If the user asks for 'a dog' and the history was 'a cat', DELETE THE CAT. Output ONLY 'a dog'.\n"
+            "2. **CONTRADICTION:** If the request contradicts the history, the REQUEST WINS. Delete the old details.\n"
+            "3. **STYLE:** Preserve the user's requested style (anime, oil, photo). Do not force 'cinematic' on everything.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
             "Provide a single JSON object with keys: \"core_subject\" (2-5 words) and \"enhanced_prompt\" (full description)."
@@ -115,7 +107,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 contents=[prompt_rewriter_instruction],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=1.0 
+                    temperature=0.5 # LOWER TEMP = More obedient, less "creative mixing"
                 )
             )
             
@@ -139,11 +131,12 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 "loading the canvas... aka grabbing a napkin.",
                 "got it. preparing the masterpiece."
                 "mixing the paints... let's see what happens.",
+                "wiping the canvas... startin' fresh.",
                 "i got a wild idea for this one.",
                 "loading the canvas...",
-                "patience, art takes time.",
-                "preparing the masterpiece."
+                "patience, art takes time."
             ]
+            
             await message.channel.send(random.choice(thinking_messages))
 
             # 4. Generate the Image
@@ -154,20 +147,16 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             )
 
             if image_obj and count > 0:
-                # --- TRACKING ---
                 try:
                     cost = api_clients.calculate_cost("imagen-4.0-fast-generate-001", "image", count=count)
                     today = datetime.datetime.now().strftime("%Y-%m-%d")
                     await bot_instance.firestore_service.update_usage_stats(today, {"images": count, "cost": cost})
-                except Exception as e:
-                    logging.error(f"Failed to track image cost: {e}")
+                except Exception: pass
                 
-                # --- SENDING ---
                 file = discord.File(image_obj, filename="vinny_art.png")
                 embed = discord.Embed(title=f"🎨 {core_subject.title()}", color=discord.Color.dark_teal())
                 embed.set_image(url="attachment://vinny_art.png")
                 
-                # Clean prompt for footer
                 clean_prompt = enhanced_prompt[:1000].replace("\n", " ")
                 embed.set_footer(text=f"{clean_prompt} | Requested by {message.author.display_name}")
                 

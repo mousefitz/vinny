@@ -164,6 +164,25 @@ class VinnyLogic(commands.Cog):
                 should_respond = True
 
             if should_respond:
+                # --- 🔥 NEW: LEARN BEFORE YOU ACT ---
+                # We verify the image FIRST so the facts are available for the command immediately.
+                if self.bot.PASSIVE_LEARNING_ENABLED and message.attachments:
+                    image_bytes = None
+                    mime_type = None
+                    for att in message.attachments:
+                        if "image" in att.content_type and att.size < 8 * 1024 * 1024:
+                            image_bytes = await att.read()
+                            mime_type = att.content_type
+                            break
+                    
+                    if image_bytes:
+                        # We use 'await' here to ensure DB is updated BEFORE we continue
+                        if extracted_facts := await extract_facts_from_message(self.bot, message, author_name=None, image_bytes=image_bytes, mime_type=mime_type):
+                            for key, value in extracted_facts.items():
+                                await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
+                                logging.info(f"👁️ Learned visual fact BEFORE replying: {key}={value}")
+
+                # --- NOW DETERMINE INTENT (With the new knowledge!) ---
                 intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
@@ -175,32 +194,35 @@ class VinnyLogic(commands.Cog):
                         if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
                     elif intent == "generate_user_portrait": 
+                        # --- NEW TAGGING LOGIC ---
                         target_name = args.get("target", "me")
                         details = args.get("details", "")
-                        
                         target_user = None
 
-                        # 1. Check for Mentions (Highest Priority)
+                        # 1. Check for Mentions (@User) - Highest Priority
                         if message.mentions:
                             target_user = message.mentions[0]
 
-                        # 2. Check for "Me" / "Myself"
+                        # 2. Check for Self-Reference
                         elif target_name.lower() in ["me", "myself", "i"]:
                             target_user = message.author
 
-                        # 3. Search by Name (Fuzzy Match)
+                        # 3. Search by Name (Text Search)
                         elif message.guild:
-                            # Search Display Names (Nicknames) first, then Usernames
+                            # Search Display Names first
                             target_user = discord.utils.find(lambda m: target_name.lower() in m.display_name.lower(), message.guild.members)
+                            # Then Usernames
                             if not target_user:
                                 target_user = discord.utils.find(lambda m: target_name.lower() in m.name.lower(), message.guild.members)
 
-                        # 4. Handle Not Found
+                        # 4. Fallback
                         if not target_user:
-                            await message.channel.send(f"who's '{target_name}'? never heard of 'em. try taggin' them.")
-                        else:
-                            # Pass the FOUND user and the DETAILS to the image task
-                            await image_tasks.handle_portrait_request(self.bot, message, target_user, details)
+                            if target_name.lower() not in ['me', 'myself']:
+                                await message.channel.send(f"who's '{target_name}'? never heard of 'em. i'll just paint you.")
+                            target_user = message.author
+                        
+                        # CALL THE NEW PORTRAIT FUNCTION
+                        await image_tasks.handle_portrait_request(self.bot, message, target_user, details)
 
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user", "")
@@ -219,10 +241,7 @@ class VinnyLogic(commands.Cog):
                         # 2. If still no user, try searching by name (Text Search)
                         elif not target_user and message.guild:
                             search_name = target_user_name.replace("@", "").strip()
-                            # A. Try finding by Discord Display Name
                             target_user = discord.utils.find(lambda m: search_name.lower() in m.display_name.lower(), message.guild.members)
-                            
-                            # B. If not found, try finding by Vinny's Internal Nickname
                             if not target_user:
                                 target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, search_name)
 
@@ -246,9 +265,6 @@ class VinnyLogic(commands.Cog):
                         # Background Sentiment Analysis (MOOD ONLY)
                         async def update_sentiment_background():
                             try:
-                                # We REMOVED the relationship_score update here because 
-                                # conversation_tasks.py handles it now. No more double counting!
-                                
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
                                 await self.update_mood_based_on_sentiment(user_sentiment)
                                 await self.update_vinny_mood()
@@ -260,22 +276,6 @@ class VinnyLogic(commands.Cog):
                         await conversation_tasks.handle_text_or_image_response(
                             self.bot, message, is_autonomous=is_autonomous, summary=None
                         )
-                
-                # 7. Passive Learning (Scanning images)
-                if self.bot.PASSIVE_LEARNING_ENABLED:
-                    image_bytes = None
-                    mime_type = None
-                    if message.attachments:
-                        for att in message.attachments:
-                            if "image" in att.content_type and att.size < 8 * 1024 * 1024:
-                                image_bytes = await att.read()
-                                mime_type = att.content_type
-                                break
-                    
-                    if extracted_facts := await extract_facts_from_message(self.bot, message, author_name=None, image_bytes=image_bytes, mime_type=mime_type):
-                        for key, value in extracted_facts.items():
-                            await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
-                            logging.info(f"Learned visual fact for {message.author.display_name}: {key}={value}")
             
             else:
                 # 8. Random Reactions (When not replying)
@@ -290,7 +290,7 @@ class VinnyLogic(commands.Cog):
 
         except Exception:
             logging.critical("CRITICAL ERROR in on_message", exc_info=True)
-
+            
     # --- MOOD LOGIC ---
 
     async def update_mood_based_on_sentiment(self, sentiment: str):

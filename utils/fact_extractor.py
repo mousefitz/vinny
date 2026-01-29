@@ -17,13 +17,16 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
         user_message = str(message_or_str)
 
     # 1. Base Prompt
+    # 1. Base Prompt (UPDATED)
     fact_extraction_prompt = (
         f"You are a highly accurate fact-extraction system. The user '{user_name}' wrote the following message. "
         f"Your task is to identify personal facts **about the user '{user_name}' ONLY**.\n"
         "Your output must be a valid JSON object.\n\n"
         "## Rules:\n"
         "1.  **Subject:** The subject MUST be the author ('I', 'my', 'me'). Ignore third-party facts.\n"
-        "2.  **Visuals:** If an image is provided, analyze it ONLY if the user's text implies it is them.\n"
+        "2.  **Visuals:** If an image is provided, analyze it if:\n"
+        "    - The user claims it is them (e.g., 'me', 'my selfie').\n"
+        "    - The user implies it is a reference for their appearance (e.g., 'use this photo', 'look at this').\n"
         "3.  **Format:** Return a JSON object where keys are attributes (e.g., 'hair_color', 'pet', 'hometown') and values are short strings.\n"
         "4.  **Empty:** If no facts are found, return {}.\n\n"
         f"## User Input:\n"
