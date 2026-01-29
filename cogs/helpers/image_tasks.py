@@ -21,18 +21,16 @@ async def handle_portrait_request(bot_instance, message, target_user, details=""
     # 1. Fetch Profile
     user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
     
-    # 2. Filter Facts (The "Old Way" you liked)
+    # 2. Filter Facts
     appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'gender', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
     appearance_facts = {}
     other_facts = {}
     
     if user_profile:
         for key, value in user_profile.items():
-            # Check if key contains any visual keyword
             if any(keyword in key.replace('_', ' ') for keyword in appearance_keywords): 
                 appearance_facts[key] = value
             else: 
-                # Keep other facts for "Vibe/Theme"
                 other_facts[key] = value
 
     # 3. Construct the "Masterpiece" Prompt
@@ -45,13 +43,12 @@ async def handle_portrait_request(bot_instance, message, target_user, details=""
     else:
         prompt_text += " Their appearance is unknown, so be creative."
 
-    # B. Add the Specific User Request (e.g. "wearing a track suit")
+    # B. Add the Specific User Request
     if details:
         prompt_text += f" They are depicted {details}."
 
-    # C. Add Vibe/Theme from non-visual facts
+    # C. Add Vibe/Theme
     if other_facts:
-        # Limit to 5 random facts to prevent prompt bloating
         items = list(other_facts.items())
         random.shuffle(items)
         selected_facts = items[:5]
@@ -59,7 +56,6 @@ async def handle_portrait_request(bot_instance, message, target_user, details=""
         prompt_text += f" The painting's theme and background should be inspired by these traits: {other_desc}."
 
     # 4. Pass to the Image Generator
-    # IMPORTANT: We pass previous_prompt=None to ensure portraits are ALWAYS fresh and don't mix with old chats.
     await handle_image_request(bot_instance, message, prompt_text, previous_prompt=None)
 
 
@@ -77,31 +73,35 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
     Generates an image using Gemini to rewrite the prompt and Imagen 4 to paint it.
     """
     async with message.channel.typing():
-        # 1. Rewriter Instruction (UPDATED FOR STRICTER CONTEXT)
+        # 1. Rewriter Instruction
         context_instruction = ""
         if previous_prompt:
             context_instruction = (
                 f"\n## CONTEXT (PREVIOUS PAINTING):\n"
                 f"The last thing you painted in this channel was: \"{previous_prompt}\".\n"
                 f"**CRITICAL DECISION - DO NOT MIX SUBJECTS:**\n"
-                f"1. **DEFAULT TO IGNORE:** Assume the User Request is a NEW, SEPARATE idea. Do NOT merge subjects.\n"
-                f"2. **ONLY MERGE IF EXPLICIT:** ONLY combine details if the user explicitly refers to the previous image (e.g., 'add a hat', 'make it darker', 'change the background', 'now draw it in space').\n"
-                f"3. **CONFLICT RESOLUTION:** If the Previous Subject was 'A Cat' and New Request is 'A Dog', draw ONLY A DOG. Do NOT draw a Cat-Dog hybrid.\n"
+                f"1. **DEFAULT TO IGNORE:** Assume the User Request is a NEW idea unless they explicitly ask to edit (e.g. 'change X', 'add Y').\n"
+                f"2. **CONFLICT RESOLUTION:** If the Previous Subject was 'A Cat' and New Request is 'A Dog', draw ONLY A DOG.\n"
             )
 
         prompt_rewriter_instruction = (
             "You are an AI Art Director. Your goal is to refine user requests into detailed image generation prompts.\n\n"
             "## CRITICAL MEMORY PROTOCOL:\n"
             f"{context_instruction}\n"
-            "## REFERENCE GUIDE (WHO IS WHO):\n"
+            "## REFERENCE GUIDE:\n"
             f"1. **THE USER:** '{message.author.display_name}'. If they say 'me', use a generic person suitable for them (unless the prompt already describes them).\n"
             f"2. **VINNY (YOU):** Robust middle-aged Italian-American man, long dark hair, beard, pirate coat.\n\n"
+            "## CONTRADICTION OVERRIDE PROTOCOL (IMPORTANT):\n"
+            "If the User Request contradicts the Context (or the Input Description), the **REQUEST WINS**.\n"
+            "- **Example:** Input says 'Person with blonde hair', Request says 'Make them bald'.\n"
+            "- **Bad Output:** 'A person with blonde hair who is bald.' (Contradiction)\n"
+            "- **Correct Output:** 'A bald person.' (DELETE the blonde hair).\n\n"
             "## VISUAL STYLE RULES:\n"
-            "1. **PRESERVE INTENT:** If the user specifies a style (e.g. 'anime', 'oil', 'sketch'), LOCK IT IN. Do not change it.\n"
-            "2. **ADAPTIVE ENHANCEMENT:** Do NOT default to 'cinematic' or '4k'. Instead, use quality boosters that FIT the style:\n"
-            "   - If 'Anime' -> use 'high quality animation, vibrant, studio ghibli style'.\n"
-            "   - If 'Photo' -> use '4k, realistic texture, cinematic lighting'.\n"
-            "   - If 'Oil Painting' -> use 'detailed brushstrokes, texture, masterpiece'.\n"
+            "1. **PRESERVE INTENT:** If the user specifies a style (e.g. 'anime', 'oil', 'sketch'), LOCK IT IN.\n"
+            "2. **ADAPTIVE ENHANCEMENT:** Do NOT default to 'cinematic' or '4k'. Use boosters that FIT the style:\n"
+            "   - If 'Anime' -> 'high quality animation, vibrant, studio ghibli style'.\n"
+            "   - If 'Photo' -> '4k, realistic texture, cinematic lighting'.\n"
+            "   - If 'Oil Painting' -> 'detailed brushstrokes, texture, masterpiece'.\n"
             "3. **NO REPETITION:** Do not use the same lighting or color palette twice in a row.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
@@ -115,7 +115,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 contents=[prompt_rewriter_instruction],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=1.0 # High temperature for maximum creativity/variety
+                    temperature=1.0 
                 )
             )
             
@@ -147,7 +147,6 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             await message.channel.send(random.choice(thinking_messages))
 
             # 4. Generate the Image
-            # Uses the cheaper, faster model by default
             image_obj, count = await api_clients.generate_image_with_genai(
                 bot_instance.gemini_client,
                 enhanced_prompt,
