@@ -380,7 +380,7 @@ class VinnyLogic(commands.Cog):
             embed.add_field(name="----------------", value="**👑 BOSS COMMANDS 👑**", inline=False)
             embed.add_field(name="!vinnycost", value="**(Owner Only)** Checks the daily bill. See how much cash I'm burning.", inline=False)
             embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
-            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets the numeric relationship score (-100 to 100).\n*Tiers: Nemesis, Enemy, Sketchy, Annoyance, Neutral, Chill, Friend, Bestie, Worshipped*", inline=False)
+            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets the numeric relationship score (-500 to 500).\n*Tiers: Obsessed, Soulmate, Family, Bestie, Friend, Chill, Neutral, Annoyance, Sketchy, Enemy, Nemesis, Arch-Nemesis, Dead to Me*", inline=False)
             embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral). Use this if I hate everyone.", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
         embed.set_footer(text="Now stop botherin' me. Salute!")
