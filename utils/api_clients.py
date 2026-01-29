@@ -43,7 +43,7 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
 
 # --- Google Cloud Imagen API ---
 
-async def generate_image_with_genai(client, prompt, model="imagen-3.0-generate-001"):
+async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-generate-001"):
     """
     Generates an image using the google-genai SDK (API Key).
     Returns: (image_bytes_io, count)

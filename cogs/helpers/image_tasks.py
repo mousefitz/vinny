@@ -62,7 +62,7 @@ async def handle_portrait_request(bot_instance, message, target_user, details=""
             image_file, cost = await api_clients.generate_image_with_genai(
                 bot_instance.gemini_client, 
                 final_prompt, 
-                model="imagen-3.0-generate-001"
+                model="imagen-4.0-fast-generate-001"
             )
 
             # D. Send Result
@@ -87,7 +87,7 @@ async def handle_portrait_request(bot_instance, message, target_user, details=""
 
 async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
     """
-    Generates an image using Gemini to rewrite the prompt and Imagen 3 to paint it.
+    Generates an image using Gemini to rewrite the prompt and Imagen 4 to paint it.
     Returns the FINAL enhanced prompt used, so it can be saved to history.
     """
     async with message.channel.typing():
