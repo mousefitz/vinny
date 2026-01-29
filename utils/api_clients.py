@@ -56,7 +56,6 @@ async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-gener
             config=types.GenerateImagesConfig(
                 number_of_images=1,
                 aspect_ratio="1:1",
-                safety_filter_level="block_only_high",
                 person_generation="allow_adult"
             )
         )
