@@ -8,83 +8,70 @@ import datetime
 from google.genai import types
 from utils import api_clients
 
+# --- 1. PORTRAIT REQUESTS (Unified "Old Style" Logic) ---
+
 async def handle_portrait_request(bot_instance, message, target_user, details=""):
     """
-    Generates a portrait of a SPECIFIC user (target_user), incorporating their profile facts
-    AND any specific details requested in the prompt.
+    Generates a portrait using the CLASSIC Vinny logic (Profile-based).
+    Works for both Self-Portraits and Other Users.
     """
     user_id = str(target_user.id)
     guild_id = str(message.guild.id) if message.guild else None
     
-    # 1. Fetch Target's Profile
-    profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
+    # 1. Fetch Profile
+    user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
     
-    # 2. Format Known Facts (Appearance only if possible)
-    # We filter for visual keywords to avoid cluttering the prompt with non-visual facts
-    visual_keys = ["hair", "eyes", "skin", "wear", "look", "face", "glasses", "beard", "gender", "appearance"]
+    # 2. Filter Facts (The "Old Way" you liked)
+    appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'gender', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
+    appearance_facts = {}
+    other_facts = {}
     
-    appearance_facts = []
-    for k, v in profile.items():
-        if any(visual in k.lower() for visual in visual_keys):
-            appearance_facts.append(f"{k}: {v}")
-            
-    appearance_str = ", ".join(appearance_facts) if appearance_facts else "Unknown appearance"
+    if user_profile:
+        for key, value in user_profile.items():
+            # Check if key contains any visual keyword
+            if any(keyword in key.replace('_', ' ') for keyword in appearance_keywords): 
+                appearance_facts[key] = value
+            else: 
+                # Keep other facts for "Vibe/Theme"
+                other_facts[key] = value
 
-    # 3. Construct the Prompt
-    # Structure: [Personality Style] + [Subject Appearance] + [Specific Request]
-    base_prompt = (
-        f"{bot_instance.personality_instruction}\n\n"
-        f"You are an AI Artist. Generate a prompt for an image generator.\n"
-        f"**SUBJECT:** {target_user.display_name}\n"
-        f"**KNOWN APPEARANCE:** {appearance_str}\n"
-        f"**USER REQUEST:** {details if details else 'A standard portrait'}\n\n"
-        f"**TASK:** Write a detailed, artistic image generation prompt describing {target_user.display_name} "
-        f"based on their known appearance. Incorporate the 'USER REQUEST' naturally into the scene. "
-        f"If the request is 'track suit', make sure they are wearing a track suit.\n"
-        f"Keep it under 50 words. Focus on visual style."
-    )
+    # 3. Construct the "Masterpiece" Prompt
+    # We use the exact phrasing from your old code because it produced good results.
+    prompt_text = f"An artistic, masterpiece oil painting of a person named {target_user.display_name}."
+    
+    # A. Add Physical Description
+    if appearance_facts:
+        appearance_desc = ", ".join([f"{value}" for key, value in appearance_facts.items()])
+        prompt_text += f" They are described as having {appearance_desc}."
+    else:
+        prompt_text += " Their appearance is unknown, so be creative."
 
-    try:
-        # A. Generate the Image Prompt using Gemini (Text)
-        response = await bot_instance.make_tracked_api_call(
-            model=bot_instance.MODEL_NAME,
-            contents=[base_prompt],
-            config=bot_instance.GEMINI_TEXT_CONFIG
-        )
-        final_prompt = response.text.strip() if response else f"Portrait of {target_user.display_name}, {details}"
+    # B. Add the Specific User Request (e.g. "wearing a track suit")
+    if details:
+        prompt_text += f" They are depicted {details}."
 
-        # B. Send "Painting" Message
-        async with message.channel.typing():
-            await message.channel.send(f"aight, paintin' **{target_user.display_name}**... {details or 'lookin good'}...")
+    # C. Add Vibe/Theme from non-visual facts
+    if other_facts:
+        # Limit to 5 random facts to prevent prompt bloating
+        items = list(other_facts.items())
+        random.shuffle(items)
+        selected_facts = items[:5]
+        other_desc = ", ".join([f"{key.replace('_', ' ')} is {value}" for key, value in selected_facts])
+        prompt_text += f" The painting's theme and background should be inspired by these traits: {other_desc}."
 
-            # C. Generate Image
-            from utils import api_clients
-            image_file, cost = await api_clients.generate_image_with_genai(
-                bot_instance.gemini_client, 
-                final_prompt, 
-                model="imagen-4.0-fast-generate-001"
-            )
+    # 4. Pass to the Image Generator
+    # We call handle_image_request which handles the "Vinny Thinking" messages and API call.
+    # Note: We pass 'prompt_text' as the prompt.
+    await handle_image_request(bot_instance, message, prompt_text)
 
-            # D. Send Result
-            if image_file:
-                # Log cost
-                today = datetime.datetime.now().strftime("%Y-%m-%d")
-                await bot_instance.firestore_service.update_usage_stats(today, {"images": 1, "cost": 0.04})
-                
-                # Send
-                file = discord.File(image_file, filename="portrait.png")
-                embed = discord.Embed(color=discord.Color.dark_teal())
-                embed.set_image(url="attachment://portrait.png")
-                embed.set_footer(text=f"{final_prompt} | Requested by {message.author.display_name}")
-                
-                await message.reply(file=file, embed=embed)
-            else:
-                await message.reply("eh, i spilled the paint. try again.")
 
-    except Exception as e:
-        logging.error(f"Failed to generate user portrait: {e}")
-        await message.reply("my brain broke while thinkin' about it.")
+# --- 2. SELF PORTRAITS (Wrapper) ---
 
+async def handle_paint_me_request(bot_instance, message: discord.Message):
+    """Wrapper that redirects 'paint me' to the unified portrait logic."""
+    await handle_portrait_request(bot_instance, message, message.author, details="")
+
+# --- 3. GENERIC IMAGE REQUESTS (New Style with Gemini + Imagen 4) ---
 async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
     """
     Generates an image using Gemini to rewrite the prompt and Imagen 4 to paint it.
