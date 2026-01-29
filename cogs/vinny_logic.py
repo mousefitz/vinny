@@ -597,8 +597,7 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='vibe')
     async def vibe_command(self, ctx, member: discord.Member = None):
         """
-        Checks Vinny's opinion of you using the NEW 9-Tier System.
-        Usage: !vibe OR !vibe @User
+        Checks Vinny's opinion of you using the EXPANDED Tier System.
         """
         target_user = member or ctx.author
         user_id = str(target_user.id)
@@ -614,33 +613,42 @@ class VinnyLogic(commands.Cog):
 
         rel_score = profile.get("relationship_score", 0)
         
-        # 2. FORCE RE-CALCULATE STATUS (To fix old "Distrusted" labels)
-        if rel_score >= 90: rel_status = "worshipped"
+        # 2. FORCE RE-CALCULATE STATUS (Expanded Tiers)
+        if rel_score >= 500: rel_status = "obsessed"       # NEW GOD TIER
+        elif rel_score >= 200: rel_status = "soulmate"     # NEW HIGH TIER
+        elif rel_score >= 100: rel_status = "family"       # NEW HIGH TIER
         elif rel_score >= 60: rel_status = "bestie"
         elif rel_score >= 25: rel_status = "friend"
         elif rel_score >= 10: rel_status = "chill"
         elif rel_score >= -10: rel_status = "neutral"
         elif rel_score >= -25: rel_status = "annoyance"
         elif rel_score >= -60: rel_status = "sketchy"
-        elif rel_score >= -90: rel_status = "enemy"
-        else: rel_status = "nemesis"
+        elif rel_score >= -100: rel_status = "enemy"
+        elif rel_score >= -200: rel_status = "nemesis"
+        elif rel_score >= -500: rel_status = "arch-nemesis" # NEW LOW TIER
+        else: rel_status = "dead to me"                     # NEW LOW TIER
 
         # 3. Get Mood & Color
         mood = self.bot.current_mood
         
         color_map = {
-            "worshipped": discord.Color.gold(),
-            "bestie":     discord.Color.purple(),
-            "friend":     discord.Color.green(),
-            "chill":      discord.Color.teal(),
-            "neutral":    discord.Color.dark_magenta(),
-            "annoyance":  discord.Color.orange(),
-            "sketchy":    discord.Color.dark_orange(),
-            "enemy":      discord.Color.red(),
-            "nemesis":    discord.Color.dark_red()
+            "obsessed":     discord.Color.from_rgb(255, 105, 180), # Hot Pink
+            "soulmate":     discord.Color.from_rgb(255, 215, 0),   # Gold
+            "family":       discord.Color.purple(),
+            "bestie":       discord.Color.dark_purple(),
+            "friend":       discord.Color.green(),
+            "chill":        discord.Color.teal(),
+            "neutral":      discord.Color.dark_magenta(),
+            "annoyance":    discord.Color.orange(),
+            "sketchy":      discord.Color.dark_orange(),
+            "enemy":        discord.Color.red(),
+            "nemesis":      discord.Color.dark_red(),
+            "arch-nemesis": discord.Color.from_rgb(50, 0, 0),      # Blood Red
+            "dead to me":   discord.Color.default()                # Black/Grey
         }
         embed_color = color_map.get(rel_status, discord.Color.dark_magenta())
 
+        # ... (Rest of the command remains the same) ...
         # 4. Generate Comment
         prompt = (
             f"{self.bot.personality_instruction}\n\n"
@@ -665,7 +673,6 @@ class VinnyLogic(commands.Cog):
         # 5. Send Embed
         embed = discord.Embed(title=f"Vibe Check: {target_user.display_name}", color=embed_color)
         embed.add_field(name="🧠 Current Mood", value=mood.title(), inline=True)
-        # Use .title() so "sketchy" becomes "Sketchy"
         embed.add_field(name="❤️ Relationship", value=f"{rel_status.title()} ({rel_score:.0f})", inline=True)
         embed.add_field(name="💬 Vinny says:", value=comment, inline=False)
         
@@ -706,6 +713,53 @@ class VinnyLogic(commands.Cog):
         embed.add_field(name="💰 All-Time", value=fmt_block(total, "Total"), inline=True)
 
         await ctx.send(embed=embed)
+
+# --- LEADERBOARD COMMAND ---
+
+    @commands.command(name='leaderboard', aliases=['ranks', 'top'])
+    async def leaderboard_command(self, ctx):
+        """Shows the most loved and most hated users in the server."""
+        if not ctx.guild: return await ctx.send("Server only, pal.")
+        
+        async with ctx.typing():
+            top_users, bottom_users = await self.bot.firestore_service.get_leaderboard_data(str(ctx.guild.id))
+            
+            if not top_users and not bottom_users:
+                return await ctx.send("I don't know anyone here yet. No scores to show.")
+                
+            embed = discord.Embed(title="🏆 Vinny's List", description="Here's who I like... and who's on thin ice.", color=discord.Color.gold())
+            
+            # --- Helper to format lines ---
+            async def format_list(users, emoji_first, emoji_others):
+                text_lines = []
+                for i, user in enumerate(users, 1):
+                    try:
+                        # Try to get their name
+                        member = ctx.guild.get_member(int(user['id'])) or await ctx.guild.fetch_member(int(user['id']))
+                        name = member.display_name
+                    except:
+                        name = "Unknown Ghost"
+                    
+                    score = int(user['score'])
+                    emoji = emoji_first if i == 1 else emoji_others
+                    text_lines.append(f"{emoji} **{i}. {name}**: {score}")
+                return "\n".join(text_lines)
+
+            # --- Add Fields ---
+            if top_users:
+                top_text = await format_list(top_users, "👑", "⭐")
+                embed.add_field(name="💖 Most Loved (The Favorites)", value=top_text, inline=False)
+            
+            if bottom_users:
+                # Only show bottom users if their score is actually negative
+                negative_users = [u for u in bottom_users if u['score'] < 0]
+                if negative_users:
+                    bottom_text = await format_list(negative_users, "💀", "💢")
+                    embed.add_field(name="💔 Most Hated (The Hit List)", value=bottom_text, inline=False)
+                
+            embed.set_footer(text="Better luck next time, bozos.")
+            
+        await ctx.send(embed=embed)       
         
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))

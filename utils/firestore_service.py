@@ -209,11 +209,13 @@ class FirestoreService:
         except Exception as e:
             logging.error(f"Failed to fetch all users for guild {guild_id}: {e}")
             return []
-        
+    
+    # --- RELATIONSHIP SCORE MANAGEMENT (CORRECTED) ---
+
     async def update_relationship_score(self, user_id: str, guild_id: str, sentiment_score: int):
         """
         Updates a user's relationship score.
-        Uses a direct Read-Modify-Write approach to avoid threading lockups.
+        Expanded Range: -1000 to 1000.
         """
         if not self.db: return 0
         
@@ -223,41 +225,41 @@ class FirestoreService:
         # Helper function to run in the background thread
         def sync_update():
             try:
-                # 1. READ current score directly
+                # 1. READ current score
                 doc = doc_ref.get()
                 current_data = doc.to_dict() if doc.exists else {}
                 current_score = current_data.get("relationship_score", 0)
                 
                 # 2. CALCULATE new score
                 new_score = current_score + sentiment_score
-                new_score = max(-100, min(100, new_score)) # Clamp between -100 and 100
-                new_score *= 0.995 # Apply slight decay (memory fading)
                 
-                # 3. WRITE back to database immediately
+                # --- UPDATED CLAMPING: Expanded to +/- 1000 ---
+                new_score = max(-1000, min(1000, new_score)) 
+                
+                new_score *= 0.999 # Very slow decay (0.1% per message) since points are harder to get
+                
+                # 3. WRITE back
                 doc_ref.set({"relationship_score": new_score}, merge=True)
                 return new_score
             except Exception as e:
                 logging.error(f"❌ DB Update failed inside thread: {e}")
                 return None
-
+        
         try:
-            # Run the sync_update function in the background
             new_score = await self.loop.run_in_executor(None, sync_update)
-            
             if new_score is not None:
-                # 4. CRITICAL: Clear the cache so !vibe updates immediately
                 cache_key = f"{user_id}_{guild_id}"
                 if cache_key in self.profile_cache:
                     del self.profile_cache[cache_key]
-                
                 logging.info(f"✅ Updated score for {user_id}: {new_score:.2f}")
                 return new_score
             else:
                 return 0
-            
         except Exception:
             logging.error(f"Failed to update relationship score for user '{user_id}'", exc_info=True)
             return 0
+           
+# --- ADDITIONAL METHODS FOR NICKNAMES, MEMORIES, PROPOSALS, MARRIAGES, AND COST SUMMARY ---
         
     async def save_user_nickname(self, user_id: str, nickname: str):
         if not self.db: return False
@@ -411,3 +413,32 @@ class FirestoreService:
             "total": total_data,
             "meta": {"date": date_str}
         }
+       
+# --- LEADERBOARD DATA FETCHING (NEW) ---
+
+    async def get_leaderboard_data(self, guild_id: str, limit: int = 5):
+        """
+        Fetches the top and bottom users by relationship score for a specific guild.
+        Returns: (top_users_list, bottom_users_list)
+        """
+        if not self.db: return [], []
+        
+        path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
+        collection_ref = self.db.collection(path)
+        
+        try:
+            # 1. Most Loved (Descending Order: 100 -> 0)
+            top_query = collection_ref.order_by("relationship_score", direction=firestore.Query.DESCENDING).limit(limit)
+            top_docs = await self.loop.run_in_executor(None, top_query.stream)
+            top_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in top_docs]
+            
+            # 2. Most Hated (Ascending Order: -100 -> 0)
+            bottom_query = collection_ref.order_by("relationship_score", direction=firestore.Query.ASCENDING).limit(limit)
+            bottom_docs = await self.loop.run_in_executor(None, bottom_query.stream)
+            bottom_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in bottom_docs]
+            
+            return top_users, bottom_users
+        except Exception:
+            logging.error(f"Failed to fetch leaderboard for guild {guild_id}", exc_info=True)
+            return [], []
+        

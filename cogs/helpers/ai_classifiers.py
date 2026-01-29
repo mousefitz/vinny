@@ -230,7 +230,7 @@ async def is_image_edit_request(bot_instance, text: str):
 async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: str):
     """
     Asks the AI to judge the message.
-    Debug Version: Logs specific block reasons if available.
+    STRICT MODE: Caps all score changes to max 5 points.
     """
     vinny_personality = bot_instance.personality_instruction
 
@@ -240,17 +240,19 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         f"--- CHARACTER ---\n{vinny_personality}\n--- END CHARACTER ---\n\n"
         f"USER: {user_name}\n"
         f"MESSAGE: \"{message_text}\"\n\n"
-        f"## SCORING RULES\n"
-        f"- **Compliments/Interests:** +5 to +10\n"
-        f"- **Normal Chat:** +1 to +3\n"
-        f"- **Rude/Boring:** -2 to -5\n"
-        f"- **CRITICAL INSULTS (Nonna, Art, Dogs):** -10 to -20 (MAJOR PENALTY)\n\n"
+        f"## SCORING RULES (STRICT CAP: 5 POINTS)\n"
+        f"Scores must be small. Do not inflate numbers.\n"
+        f"- **Amazing Compliment/Shared Interest:** +3 to +5 (Max +5)\n"
+        f"- **Nice/Friendly:** +1 to +2\n"
+        f"- **Normal/Boring:** 0 (No change)\n"
+        f"- **Rude/Annoying:** -1 to -3\n"
+        f"- **CRITICAL INSULT (Nonna, Art, Dogs):** -5 to -10 (Max Penalty -10)\n\n"
         f"## REQUIRED RESPONSE FORMAT\n"
         f"You must reply with valid JSON only. Do not add markdown.\n"
         f"{{\n"
         f"  \"reasoning\": \"Analysis text...\",\n"
         f"  \"category\": \"POSITIVE\" | \"NEUTRAL\" | \"NEGATIVE\" | \"CRITICAL_INSULT\",\n"
-        f"  \"score\": (integer between -100 and 100)\n"
+        f"  \"score\": (integer between -10 and 5)\n"
         f"}}"
     )
 
@@ -267,17 +269,16 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
         # --- API Crash Check ---
         if response is None:
             logging.warning(f"⚠️ API Error (Crashed) for: '{message_text}'")
-            return 1 
+            return 0 
 
-        # --- Safety/Block Check with Details ---
+        # --- Safety/Block Check ---
         if not hasattr(response, 'text') or not response.text:
-            # Try to get the reason
             reason = "Unknown"
             if hasattr(response, 'candidates') and response.candidates:
                 reason = response.candidates[0].finish_reason
             
             logging.warning(f"⚠️ Blocked! Reason: {reason} | Input: '{message_text}'")
-            return 1 
+            return 0 
         
         # --- Success ---
         text_response = response.text.strip()
@@ -291,4 +292,4 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
 
     except Exception as e:
         logging.error(f"Sentiment Analysis Failed: {e}")
-        return 1
+        return 0
