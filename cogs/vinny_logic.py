@@ -188,9 +188,18 @@ class VinnyLogic(commands.Cog):
                 
                 async with typing_ctx:
                     if intent == "generate_image":
-                        prompt = args.get("prompt", cleaned_content)
+                        raw_prompt = args.get("prompt", cleaned_content)
+                        
+                        # --- FIX 1: SCRUB THE BOT'S NAME FROM THE PROMPT ---
+                        # This stops him from thinking "Vinny draw x" means "Draw Vinny and x"
+                        clean_prompt = re.sub(r'\b(vinny|vincenzo|vin|draw|paint|make|generate|please)\b', '', raw_prompt, flags=re.IGNORECASE).strip()
+                        
+                        # If we scrubbed everything away, revert to raw (e.g. if the prompt was just "draw")
+                        if len(clean_prompt) < 2: 
+                            clean_prompt = raw_prompt
+
                         previous_prompt = self.channel_image_history.get(message.channel.id)
-                        final_prompt = await image_tasks.handle_image_request(self.bot, message, prompt, previous_prompt)
+                        final_prompt = await image_tasks.handle_image_request(self.bot, message, clean_prompt, previous_prompt)
                         if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
                     elif intent == "generate_user_portrait": 
@@ -212,6 +221,10 @@ class VinnyLogic(commands.Cog):
                             name = name.strip()
                             if not name: continue
                             
+                            # --- FIX 2: IGNORE TRIGGER WORDS AS NAMES ---
+                            if name.lower() in ["vinny", "vincenzo", "vin", "draw", "paint", "picture", "of", "please"]:
+                                continue
+
                             # Handle "Me" / "I"
                             if name in ["me", "myself", "i"]:
                                 if message.author not in identified_users: 
@@ -223,14 +236,26 @@ class VinnyLogic(commands.Cog):
                                 if not found:
                                      found = await utilities.find_user_by_vinny_name(self.bot, message.guild, name)
                                 
-                                if found and found not in identified_users:
-                                    identified_users.append(found)
+                                if found:
+                                    # --- FIX 3: IGNORE THE BOT UNLESS REQUESTED ---
+                                    if found.id == self.bot.user.id:
+                                        # Only include Vinny if the user specifically said "yourself", "self", "us", or "we"
+                                        is_explicit = re.search(r'\b(yourself|self|us|we)\b', message.content.lower())
+                                        if not is_explicit:
+                                            continue 
+
+                                    if found not in identified_users:
+                                        identified_users.append(found)
 
                         # 3. Fallback
                         if not identified_users:
-                            identified_users.append(message.author)
-                            if target_str.lower() not in ['me', 'myself']:
-                                await message.channel.send(f"couldn't find '{target_str}', so i'm just paintin' you.")
+                            # If they specifically asked for Vinny ("paint yourself"), add him now manually
+                            if target_str.lower() in ["yourself", "self", "vinny"]:
+                                identified_users.append(self.bot.user)
+                            else:
+                                identified_users.append(message.author)
+                                if target_str.lower() not in ['me', 'myself']:
+                                    await message.channel.send(f"couldn't find '{target_str}', so i'm just paintin' you.")
 
                         # CALL PORTRAIT FUNCTION WITH LIST
                         await image_tasks.handle_portrait_request(self.bot, message, identified_users, details)
