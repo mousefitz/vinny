@@ -10,60 +10,65 @@ from utils import api_clients
 
 # --- 1. PORTRAIT REQUESTS (Unified "Old Style" Logic) ---
 
-async def handle_portrait_request(bot_instance, message, target_user, details=""):
+async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
-    Generates a portrait using the CLASSIC Vinny logic (Profile-based).
-    Works for both Self-Portraits and Other Users.
+    Generates a portrait for ONE or MULTIPLE users using Profile-based logic.
+    Accepts a LIST of users.
     """
-    user_id = str(target_user.id)
+    if not isinstance(target_users, list):
+        target_users = [target_users]
+
     guild_id = str(message.guild.id) if message.guild else None
     
-    # 1. Fetch Profile
-    user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
+    # 1. Build the Description for ALL subjects
+    prompt_parts = [f"A high-quality artistic portrait featuring {len(target_users)} people."]
     
-    # 2. Filter Facts
     appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'gender', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
-    appearance_facts = {}
-    other_facts = {}
-    
-    if user_profile:
-        for key, value in user_profile.items():
-            if any(keyword in key.replace('_', ' ') for keyword in appearance_keywords): 
-                appearance_facts[key] = value
-            else: 
-                other_facts[key] = value
 
-    # 3. Construct the "Masterpiece" Prompt
-    prompt_text = f"An artistic, masterpiece oil painting of a person named {target_user.display_name}."
-    
-    # A. Add Physical Description
-    if appearance_facts:
-        appearance_desc = ", ".join([f"{value}" for key, value in appearance_facts.items()])
-        prompt_text += f" They are described as having {appearance_desc}."
-    else:
-        prompt_text += " Their appearance is unknown, so be creative."
+    for i, user in enumerate(target_users, 1):
+        user_id = str(user.id)
+        user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
+        
+        appearance_facts = []
+        other_facts = []
 
-    # B. Add the Specific User Request
+        if user_profile:
+            for key, value in user_profile.items():
+                if any(keyword in key.replace('_', ' ') for keyword in appearance_keywords): 
+                    appearance_facts.append(value)
+                else: 
+                    other_facts.append(f"{key.replace('_', ' ')} is {value}")
+
+        # Construct Subject Description
+        desc = f"**Subject {i} ({user.display_name}):**"
+        if appearance_facts:
+            desc += f" They have {', '.join(appearance_facts)}."
+        else:
+            desc += " Appearance is unknown (be creative)."
+        
+        # Add a little flavor (random trait)
+        if other_facts:
+            random.shuffle(other_facts)
+            desc += f" Vibe: {other_facts[0]}."
+            
+        prompt_parts.append(desc)
+
+    # 2. Add General Details
     if details:
-        prompt_text += f" They are depicted {details}."
+        prompt_parts.append(f"**Scene Details:** {details}")
 
-    # C. Add Vibe/Theme
-    if other_facts:
-        items = list(other_facts.items())
-        random.shuffle(items)
-        selected_facts = items[:5]
-        other_desc = ", ".join([f"{key.replace('_', ' ')} is {value}" for key, value in selected_facts])
-        prompt_text += f" The painting's theme and background should be inspired by these traits: {other_desc}."
-
+    # 3. Final Prompt Assembly
+    final_prompt_text = " ".join(prompt_parts)
+    
     # 4. Pass to the Image Generator
-    await handle_image_request(bot_instance, message, prompt_text, previous_prompt=None)
+    await handle_image_request(bot_instance, message, final_prompt_text, previous_prompt=None)
 
 
 # --- 2. SELF PORTRAITS (Wrapper) ---
 
 async def handle_paint_me_request(bot_instance, message: discord.Message):
     """Wrapper that redirects 'paint me' to the unified portrait logic."""
-    await handle_portrait_request(bot_instance, message, message.author, details="")
+    await handle_portrait_request(bot_instance, message, [message.author], details="")
 
 
 # --- 3. GENERIC IMAGE REQUESTS (Rewriter & Generator) ---
@@ -72,6 +77,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
     """
     Generates an image using Gemini to rewrite the prompt.
     NUCLEAR CONTEXT FIX: Forces AI to discard history unless explicitly asked to edit.
+    NO SAFETY FILTER: Keeps the prompt "raw" and "fun".
     """
     async with message.channel.typing():
         # 1. Rewriter Instruction
@@ -94,7 +100,8 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             "## CRITICAL INSTRUCTIONS:\n"
             "1. **NEW SUBJECT = NEW PROMPT:** If the user asks for 'a dog' and the history was 'a cat', DELETE THE CAT. Output ONLY 'a dog'.\n"
             "2. **CONTRADICTION:** If the request contradicts the history, the REQUEST WINS. Delete the old details.\n"
-            "3. **STYLE:** Preserve the user's requested style (anime, oil, photo). Do not force 'cinematic' on everything.\n\n"
+            "3. **STYLE:** Preserve the user's requested style (anime, oil, photo). Do not force 'cinematic' on everything.\n"
+            "4. **KEEP THE CHAOS:** If the user asks for something weird, gross, or chaotic (e.g. 'pooping', 'screaming', 'ugly'), **INCLUDE IT** in the prompt. Do not sanitize it. Let the image generator deal with it.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
             "Provide a single JSON object with keys: \"core_subject\" (2-5 words) and \"enhanced_prompt\" (full description)."
@@ -102,12 +109,24 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
 
         try:
             # 2. Generate Enhanced Prompt
+            # Safety Settings OFF for the REWRITER so it doesn't block the prompt text
+            safety_settings_off = [
+                types.SafetySetting(category=cat, threshold="OFF")
+                for cat in [
+                    types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                    types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                    types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                    types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                ]
+            ]
+            
             response = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME,
                 contents=[prompt_rewriter_instruction],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.5 # LOWER TEMP = More obedient, less "creative mixing"
+                    temperature=0.7, # Higher temp for more creativity
+                    safety_settings=safety_settings_off
                 )
             )
             

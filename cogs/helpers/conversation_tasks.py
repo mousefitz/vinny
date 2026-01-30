@@ -360,15 +360,24 @@ async def handle_server_knowledge_request(bot_instance, message: discord.Message
         await message.channel.send("my head's a real mess. i've been listenin', but it's all just noise right now.")
 
 async def handle_correction(bot_instance, message: discord.Message):
-    """Identifies and removes incorrect facts from the user's profile."""
+    """Identifies and removes MULTIPLE incorrect facts from the user's profile."""
     user_id = str(message.author.id)
     guild_id = str(message.guild.id) if message.guild else None
-    correction_prompt = (f"A user is correcting a fact about themselves. Their message is: \"{message.content}\".\nYour task is to identify the specific fact they are correcting. For example, if they say 'I'm not bald', the fact is 'is bald'. If they say 'I don't have a cat', the fact is 'has a cat'.\nPlease return a JSON object with a single key, \"fact_to_remove\", containing the fact you identified.\n\nExample:\nUser message: 'Vinny, that's not true, my favorite color is red, not blue.'\nOutput: {{\"fact_to_remove\": \"favorite color is blue\"}}")
+    
+    # 1. Identify WHAT to remove (Allowing multiple items)
+    correction_prompt = (
+        f"A user is correcting facts about themselves. Their message is: \"{message.content}\".\n"
+        f"Your task is to identify ALL the specific facts they are correcting.\n"
+        f"Return a JSON object with a single key, \"facts_to_remove\", containing a LIST of strings.\n\n"
+        f"Example:\n"
+        f"User message: 'I'm not bald anymore and I hate pizza now.'\n"
+        f"Output: {{\"facts_to_remove\": [\"is bald\", \"likes pizza\"]}}"
+    )
     
     try:
         json_config = types.GenerateContentConfig(response_mime_type="application/json")
         async with message.channel.typing():
-            # First API Call
+            # First API Call: Get the list of concepts
             response1 = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME, 
                 contents=[correction_prompt], 
@@ -379,17 +388,27 @@ async def handle_correction(bot_instance, message: discord.Message):
                 await message.channel.send("my brain's all fuzzy, i didn't get what i was wrong about."); return
             
             fact_data = json.loads(response1.text)
-            fact_to_remove = fact_data.get("fact_to_remove")
-            if not fact_to_remove:
+            facts_to_remove = fact_data.get("facts_to_remove", [])
+            
+            if not facts_to_remove:
                 await message.channel.send("huh? what was i wrong about? try bein more specific, pal."); return
             
+            # Fetch Profile
             user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
             if not user_profile:
                 await message.channel.send("i don't even know anything about you to be wrong about!"); return
             
-            key_mapping_prompt = (f"A user's profile is stored as a JSON object. I need to find the key that corresponds to the fact: \"{fact_to_remove}\".\nHere is the user's current profile data: {json.dumps(user_profile, indent=2)}\nBased on the data, which key is the most likely match for the fact I need to remove? Return a JSON object with a single key, \"database_key\".\n\nExample:\nFact: 'is a painter'\nProfile: {{\"occupation\": \"a painter\"}}\nOutput: {{\"database_key\": \"occupation\"}}")
+            # 2. Map concepts to Database Keys
+            key_mapping_prompt = (
+                f"A user wants to remove the following facts: {json.dumps(facts_to_remove)}.\n"
+                f"I need to find the specific database keys in their profile that correspond to these facts.\n"
+                f"Here is the user's current profile data: {json.dumps(user_profile, indent=2)}\n\n"
+                f"## INSTRUCTIONS:\n"
+                f"Return a JSON object with a key \"keys_to_delete\" containing a LIST of the exact database keys to remove.\n"
+                f"If a fact doesn't have a matching key, ignore it."
+            )
             
-            # Second API Call
+            # Second API Call: Get the DB Keys
             response2 = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME, 
                 contents=[key_mapping_prompt], 
@@ -400,15 +419,26 @@ async def handle_correction(bot_instance, message: discord.Message):
                 await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird."); return
             
             key_data = json.loads(response2.text)
-            db_key = key_data.get("database_key")
+            keys_to_delete = key_data.get("keys_to_delete", [])
             
-            if not db_key or db_key not in user_profile:
-                await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird."); return
+            if not keys_to_delete:
+                await message.channel.send("i looked through my notes but i couldn't find those specific facts recorded anywhere."); return
             
-            if await bot_instance.firestore_service.delete_user_profile_fact(user_id, guild_id, db_key):
-                await message.channel.send(f"aight, my mistake. i'll forget that whole '{db_key.replace('_', ' ')}' thing. salute.")
+            # 3. Execute Deletions
+            deleted_count = 0
+            for key in keys_to_delete:
+                if await bot_instance.firestore_service.delete_user_profile_fact(user_id, guild_id, key):
+                    deleted_count += 1
+            
+            # 4. Confirmation Message
+            if deleted_count > 0:
+                if deleted_count == 1:
+                    await message.channel.send(f"aight, my mistake. i'll forget that '{keys_to_delete[0].replace('_', ' ')}' thing.")
+                else:
+                    await message.channel.send(f"aight, i scrambled my brains. forgot {deleted_count} things about ya. fresh start.")
             else:
-                await message.channel.send("i tried to forget it, but the memory is stuck in there good. damn.")
+                await message.channel.send("tried to delete 'em, but my memory is stubborn. somethin' went wrong.")
+
     except Exception:
         logging.error("An error occurred in handle_correction.", exc_info=True)
         await message.channel.send("my head's poundin'. somethin went wrong tryin to fix my memory.")

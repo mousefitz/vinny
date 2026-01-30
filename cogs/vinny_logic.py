@@ -194,35 +194,46 @@ class VinnyLogic(commands.Cog):
                         if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
                     elif intent == "generate_user_portrait": 
-                        # --- NEW TAGGING LOGIC ---
-                        target_name = args.get("target", "me")
+                        # --- MULTI-USER TAGGING LOGIC ---
+                        target_str = args.get("target", "me")
                         details = args.get("details", "")
-                        target_user = None
-
-                        # 1. Check for Mentions (@User) - Highest Priority
-                        if message.mentions:
-                            target_user = message.mentions[0]
-
-                        # 2. Check for Self-Reference
-                        elif target_name.lower() in ["me", "myself", "i"]:
-                            target_user = message.author
-
-                        # 3. Search by Name (Text Search)
-                        elif message.guild:
-                            # Search Display Names first
-                            target_user = discord.utils.find(lambda m: target_name.lower() in m.display_name.lower(), message.guild.members)
-                            # Then Usernames
-                            if not target_user:
-                                target_user = discord.utils.find(lambda m: target_name.lower() in m.name.lower(), message.guild.members)
-
-                        # 4. Fallback
-                        if not target_user:
-                            if target_name.lower() not in ['me', 'myself']:
-                                await message.channel.send(f"who's '{target_name}'? never heard of 'em. i'll just paint you.")
-                            target_user = message.author
                         
-                        # CALL THE NEW PORTRAIT FUNCTION
-                        await image_tasks.handle_portrait_request(self.bot, message, target_user, details)
+                        identified_users = []
+                        
+                        # 1. Start with explicit mentions (Highest Confidence)
+                        for m in message.mentions:
+                            if m not in identified_users: identified_users.append(m)
+
+                        # 2. Parse text for others (Split by "and", "&", "with", ",")
+                        clean_str = re.sub(r'<@!?\d+>', '', target_str).lower()
+                        potential_names = re.split(r'\s+(?:and|&|,|with)\s+', clean_str)
+
+                        for name in potential_names:
+                            name = name.strip()
+                            if not name: continue
+                            
+                            # Handle "Me" / "I"
+                            if name in ["me", "myself", "i"]:
+                                if message.author not in identified_users: 
+                                    identified_users.append(message.author)
+                            else:
+                                # Try Text Search in Server
+                                found = discord.utils.find(lambda m: name in m.display_name.lower() or name in m.name.lower(), message.guild.members)
+                                # Try Nickname Lookup
+                                if not found:
+                                     found = await utilities.find_user_by_vinny_name(self.bot, message.guild, name)
+                                
+                                if found and found not in identified_users:
+                                    identified_users.append(found)
+
+                        # 3. Fallback
+                        if not identified_users:
+                            identified_users.append(message.author)
+                            if target_str.lower() not in ['me', 'myself']:
+                                await message.channel.send(f"couldn't find '{target_str}', so i'm just paintin' you.")
+
+                        # CALL PORTRAIT FUNCTION WITH LIST
+                        await image_tasks.handle_portrait_request(self.bot, message, identified_users, details)
 
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user", "")
@@ -380,6 +391,7 @@ class VinnyLogic(commands.Cog):
             embed.add_field(name="----------------", value="**👑 BOSS COMMANDS 👑**", inline=False)
             embed.add_field(name="!vinnycost", value="**(Owner Only)** Checks the daily bill. See how much cash I'm burning.", inline=False)
             embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
+            # UPDATED: Full List of Tiers to match constants.py
             embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets the numeric relationship score (-500 to 500).\n*Tiers: Obsessed, Soulmate, Family, Bestie, Friend, Chill, Neutral, Annoyance, Sketchy, Enemy, Nemesis, Arch-Nemesis, Dead to Me*", inline=False)
             embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral). Use this if I hate everyone.", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
