@@ -968,19 +968,16 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='rolecolor')
     async def rolecolor_command(self, ctx, color1: str, color2: str = None):
         """
-        Sets a custom role color. Tracks the role by ID so you can rename it safely.
+        Sets a custom role color. Forces Gradient style if 2 colors are provided.
         """
         if not ctx.guild: return await ctx.send("server only, pal.")
 
-        # 1. SETUP & CHECKS
+        # 1. CONFIG & PERMISSIONS
         user_id = str(ctx.author.id)
         guild_id = str(ctx.guild.id)
         
-        # Load Config & Profile
-        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
-        server_profile = await self.bot.firestore_service.get_user_profile(guild_id, None)
-        
         # Check Allowed Channel
+        server_profile = await self.bot.firestore_service.get_user_profile(guild_id, None)
         role_config = {}
         if server_profile and "role_config" in server_profile:
             try: role_config = json.loads(server_profile["role_config"])
@@ -990,70 +987,106 @@ class VinnyLogic(commands.Cog):
         if allowed_channel_id and str(ctx.channel.id) != allowed_channel_id:
             return await ctx.send(f"hey! take this over to <#{allowed_channel_id}>.")
 
-        # Check Permissions
         if not ctx.guild.me.guild_permissions.manage_roles:
             return await ctx.send("i need 'Manage Roles' permission first.")
 
-        # 2. PARSE COLORS
+        # 2. ROBUST COLOR PARSING (HueTweaker Style)
         def parse_hex(hex_str):
-            hex_str = hex_str.strip('#')
-            try: return int(hex_str, 16)
-            except ValueError: return None
+            if not hex_str: return None
+            # Strip standard hex characters
+            clean_hex = hex_str.strip('#').replace('0x', '')
+            try:
+                # Verify it's a valid hex number
+                int(clean_hex, 16)
+                # Pad if shorthand (e.g., FFF -> FFFFFF) though rare in discord
+                if len(clean_hex) == 3: 
+                    clean_hex = "".join([c*2 for c in clean_hex])
+                return clean_hex
+            except ValueError:
+                return None
 
-        primary_int = parse_hex(color1)
-        if primary_int is None: return await ctx.send(f"'{color1}' ain't a valid hex code.")
-        secondary_int = parse_hex(color2) if color2 else None
+        hex1 = parse_hex(color1)
+        hex2 = parse_hex(color2)
 
-        # 3. FIND ROLE (SMART LOOKUP)
+        if not hex1:
+            return await ctx.send(f"'{color1}' ain't a valid hex code.")
+            
+        # 3. THE "BLACK" CHECK (Crucial for gradients)
+        # Discord treats 000000 as "No Color/Transparent". 
+        # HueTweaker converts this to 000001 so the gradient style actually sticks.
+        is_black_adjusted = False
+        if hex1 == "000000":
+            hex1 = "000001"
+            is_black_adjusted = True
+        if hex2 == "000000":
+            hex2 = "000001"
+            is_black_adjusted = True
+
+        primary_int = int(hex1, 16)
+        secondary_int = int(hex2, 16) if hex2 else None
+
+        # 4. FIND TARGET ROLE
+        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
         role = None
-        # Try ID first (Best for renamed roles)
+        
         if profile and "custom_role_id" in profile:
             role = ctx.guild.get_role(int(profile["custom_role_id"]))
         
-        # Fallback to Username (Legacy/First time)
         if not role:
             role = discord.utils.get(ctx.guild.roles, name=ctx.author.name)
 
         async with ctx.typing():
             try:
-                # 4. CREATE IF MISSING
+                # 5. CREATE or EDIT (Atomic Operations)
+                
+                # CASE A: Create New Role
                 if not role:
-                    role = await ctx.guild.create_role(name=ctx.author.name, reason="Vinny Custom Role")
+                    role = await ctx.guild.create_role(
+                        name=ctx.author.name,
+                        color=discord.Color(primary_int),
+                        secondary_color=discord.Color(secondary_int) if secondary_int is not None else None,
+                        reason="Vinny Custom Role Creation"
+                    )
                     await ctx.send(f"created a new role for ya: **{role.name}**.")
                     
-                    # Handle Positioning (Anchor)
+                    # Save ID
+                    await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
+
+                    # Position Handling
                     anchor_role_id = role_config.get("anchor_role_id")
                     if anchor_role_id:
                         anchor_role = ctx.guild.get_role(int(anchor_role_id))
                         if anchor_role and ctx.guild.me.top_role.position > anchor_role.position:
                              await role.edit(position=max(1, anchor_role.position - 1))
 
-                # 5. SAVE THE ID (CRITICAL STEP)
-                # This locks the role to the user so they can rename it later
-                await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
+                # CASE B: Edit Existing Role
+                else:
+                    await role.edit(
+                        color=discord.Color(primary_int),
+                        secondary_color=discord.Color(secondary_int) if secondary_int is not None else None,
+                        reason="Vinny Color Update"
+                    )
 
+                # Assign if missing
                 if role not in ctx.author.roles:
                     await ctx.author.add_roles(role)
-                
-                # 6. APPLY COLORS
-                await role.edit(color=discord.Color(primary_int), reason="Vinny Color Update")
-                
-                if secondary_int is not None:
-                    try:
-                        url = f"/guilds/{ctx.guild.id}/roles/{role.id}"
-                        payload = {"secondary_color": secondary_int}
-                        await self.bot.http.request(discord.http.Route('PATCH', url), json=payload)
-                        await ctx.send(f"set **{role.name}** to **{color1}** and **{color2}**.")
-                    except Exception:
-                        await ctx.send(f"set **{role.name}** to **{color1}** (gradient failed).")
-                else:
-                    await ctx.send(f"set **{role.name}** to **{color1}**.")
 
+                # 6. CONFIRMATION MESSAGE
+                style_type = "Gradient" if secondary_int is not None else "Solid"
+                if is_black_adjusted:
+                    await ctx.send(f"set **{role.name}** to **#{hex1}** (Style: {style_type}).\n*note: adjusted pure black to #000001 so it shows up.*")
+                elif secondary_int:
+                    await ctx.send(f"set **{role.name}** to **#{hex1}** - **#{hex2}**. (Style: {style_type})")
+                else:
+                    await ctx.send(f"set **{role.name}** to **#{hex1}**. (Style: {style_type})")
+
+            except TypeError:
+                await ctx.send("critical error: my python library is outdated and doesn't know what a 'gradient' is. please update `discord.py`.")
             except discord.Forbidden:
-                await ctx.send("i can't edit that role. is it higher than mine?")
-            except Exception:
+                await ctx.send("i can't edit that role. make sure it's below my 'Vinny' role in the list!")
+            except Exception as e:
                 logging.error("Role color command failed.", exc_info=True)
-                await ctx.send("something broke. my bad.")
+                await ctx.send("something broke properly. check the logs.")
 
     @commands.command(name='rolename')
     async def rolename_command(self, ctx, *, new_name: str):
