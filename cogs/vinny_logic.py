@@ -838,7 +838,6 @@ class VinnyLogic(commands.Cog):
         """
         Sets a custom role color.
         Uses Hybrid logic: Tries Official API first, falls back to Raw API if library is old.
-        Includes HueTweaker's 'Black Fix' for visibility.
         """
         if not ctx.guild: return await ctx.send("server only, pal.")
 

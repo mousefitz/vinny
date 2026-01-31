@@ -1,7 +1,12 @@
-# Environment variables
-.env
-
-# Python cache
+# Python bytecode
 __pycache__/
+*.py[cod]
 *.pyc
 .vscode/settings.json
+# Local environment variables
+.env
+environment.yml
+# Conda/Virtual Env
+env/
+venv/
+.conda/
