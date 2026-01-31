@@ -15,13 +15,18 @@ async def check_and_fix_embeds(message: discord.Message) -> bool:
         fixed_url = content.replace("instagram.com", "kkinstagram.com")
     elif "tiktok.com/" in content and "kktiktok.com" not in content:
         fixed_url = content.replace("tiktok.com", "kktiktok.com")
-    elif ("twitter.com/" in content or "x.com/" in content) and "fixupx.com" not in content:
-        fixed_url = content.replace("twitter.com", "fixupx.com").replace("x.com", "fixupx.com")
-    elif "youtube.com/shorts/" in content:
-        match = re.search(r"youtube\.com/shorts/([a-zA-Z0-9_-]+)", content)
-        if match: fixed_url = f"https://www.youtube.com/watch?v={match.group(1)}"
-    elif "music.youtube.com/" in content:
-        fixed_url = content.replace("music.youtube.com", "youtube.com")
+    elif ("twitter.com/" in content or "x.com" in content) and "fixupx.com" not in content:
+        # First, standard safe replace for twitter.com (it's unique enough)
+        temp_content = content.replace("twitter.com", "fixupx.com")
+        
+        # Second, STRICT Regex for x.com
+        # This prevents "box.com" or "max.com" from turning into "fixupx"
+        x_pattern = r'(https?://(?:www\.)?)x\.com(?![\w])'
+        fixed_url = re.sub(x_pattern, r'\1fixupx.com', temp_content)
+        
+        # If the regex found nothing (e.g. input was just "box.com"), ignore it
+        if fixed_url == content:
+            fixed_url = None
 
     # --- The New "Fix & Replace" Logic ---
     if fixed_url:
