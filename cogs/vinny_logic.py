@@ -402,24 +402,37 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='help')
     async def help_command(self, ctx):
         embed = discord.Embed(title="What do ya want?", description="Heh. Aight, so you need help? Pathetic. Here's the stuff I can do if ya use the '!' thing. Don't get used to it.", color=discord.Color.dark_gold())
+        
+        # --- General Commands ---
         embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
         embed.add_field(name="!vibe [@user]", value="Checks what I think of you (or someone else if you tag 'em).", inline=False)
+        embed.add_field(name="!rolecolor [hex1] [hex2]", value="Sets your custom role color (and optional gradient).\n*Example: `!rolecolor #FF0000 #0000FF`*", inline=False)
+        embed.add_field(name="!rolename [new name]", value="Renames your custom color role.\n*Example: `!rolename The Big Cheese`*", inline=False)
         embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
         embed.add_field(name="!weather [location]", value="Gives you the damn weather. Don't blame me if it's wrong.\n*Example: `!weather 90210`*", inline=False)
         embed.add_field(name="!horoscope [sign]", value="I'll look at the sky and tell ya what's up. It's probably chaos.\n*Example: `!horoscope gemini`*", inline=False)
+        
+        # --- Marriage Commands ---
         embed.add_field(name="!propose [@user]", value="Get down on one knee and propose to someone special.", inline=False)
         embed.add_field(name="!marry [@user]", value="Accept a proposal from someone who just proposed to you.", inline=False)
         embed.add_field(name="!divorce", value="End your current marriage. Ouch.", inline=False)
         embed.add_field(name="!ballandchain", value="Checks who you're hitched to. If you have to ask, it might be bad news.", inline=False)
         embed.add_field(name="!vinnycalls [@user] [name]", value="Gives someone a nickname that I'll remember.\n*Example: `!vinnycalls @SomeUser Cori`*", inline=False)
-        if await self.bot.is_owner(ctx.author):
+        
+        # --- Admin / Owner Commands ---
+        is_admin = ctx.channel.permissions_for(ctx.author).manage_guild or await self.bot.is_owner(ctx.author)
+        
+        if is_admin:
             embed.add_field(name="----------------", value="**👑 BOSS COMMANDS 👑**", inline=False)
+            embed.add_field(name="!setup_rolecolor [#channel] [@role]", value="**(Admin)** Sets the allowed channel and anchor role for !rolecolor.", inline=False)
+            
+        if await self.bot.is_owner(ctx.author):
             embed.add_field(name="!vinnycost", value="**(Owner Only)** Checks the daily bill. See how much cash I'm burning.", inline=False)
-            embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to. Or shuts me up.", inline=False)
-            # UPDATED: Full List of Tiers to match constants.py
-            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets the numeric relationship score (-500 to 500).\n*Tiers: Obsessed, Soulmate, Family, Bestie, Friend, Chill, Neutral, Annoyance, Sketchy, Enemy, Nemesis, Arch-Nemesis, Dead to Me*", inline=False)
-            embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral). Use this if I hate everyone.", inline=False)
+            embed.add_field(name="!autonomy [on/off]", value="**(Owner Only)** Turns my brain on or off. Lets me talk without bein' talked to.", inline=False)
+            embed.add_field(name="!set_relationship [@user] [score]", value="**(Owner Only)** Sets the numeric relationship score manually.", inline=False)
+            embed.add_field(name="!forgive_all", value="**(Owner Only)** Resets EVERYONE'S relationship score to 0 (Neutral).", inline=False)
             embed.add_field(name="!clear_memories", value="**(Owner Only)** Clears all of my automatic conversation summaries for this server.", inline=False)
+            
         embed.set_footer(text="Now stop botherin' me. Salute!")
         await ctx.send(embed=embed)
 
@@ -727,7 +740,7 @@ class VinnyLogic(commands.Cog):
 
         # 5. Send Embed
         embed = discord.Embed(title=f"Vibe Check: {target_user.display_name}", color=embed_color)
-        embed.add_field(name="🧠 Current Mood", value=mood.title(), inline=True)
+        embed.add_field(name="🧠 Vinny's Mood", value=mood.title(), inline=True)
         embed.add_field(name="❤️ Relationship", value=f"{rel_status.title()} ({rel_score:.0f})", inline=True)
         embed.add_field(name="💬 Vinny says:", value=comment, inline=False)
         
@@ -815,6 +828,258 @@ class VinnyLogic(commands.Cog):
             embed.set_footer(text="Better luck next time, bozos.")
             
         await ctx.send(embed=embed)       
+
+# --- ROLE MANAGEMENT COMMANDS ---
+
+# Allows users to set custom role colors, with optional gradient support.
+
+    @commands.command(name='rolecolor')
+    async def rolecolor_command(self, ctx, color1: str, color2: str = None):
+        """
+        Sets a custom role color (and optional gradient) for the user.
+        Usage: !rolecolor #FF0000 [#0000FF]
+        """
+        if not ctx.guild: return await ctx.send("server only, pal.")
+
+        # --- 1. CONFIG CHECK (Channel & Anchor) ---
+        # Fetch the server's config "profile"
+        server_profile = await self.bot.firestore_service.get_user_profile(str(ctx.guild.id), None)
+        role_config = {}
         
+        if server_profile and "role_config" in server_profile:
+            try:
+                role_config = json.loads(server_profile["role_config"])
+            except: pass
+
+        # A. Enforce Channel Limit (if configured)
+        allowed_channel_id = role_config.get("allowed_channel_id")
+        if allowed_channel_id and str(ctx.channel.id) != allowed_channel_id:
+            return await ctx.send(f"hey! take this over to <#{allowed_channel_id}>. we're trying to keep things tidy.")
+
+        # --- 2. PARSE COLORS ---
+        def parse_hex(hex_str):
+            hex_str = hex_str.strip('#')
+            try: return int(hex_str, 16)
+            except ValueError: return None
+
+        primary_int = parse_hex(color1)
+        if primary_int is None: return await ctx.send(f"'{color1}' ain't a valid hex code. try #FF0000.")
+            
+        secondary_int = parse_hex(color2) if color2 else None
+
+        # --- 3. PERMISSION CHECK ---
+        if not ctx.guild.me.guild_permissions.manage_roles:
+            return await ctx.send("i need 'Manage Roles' permission first.")
+
+        # --- 4. FIND OR CREATE ROLE ---
+        role_name = ctx.author.name
+        role = discord.utils.get(ctx.guild.roles, name=role_name)
+        
+        async with ctx.typing():
+            try:
+                if not role:
+                    role = await ctx.guild.create_role(name=role_name, reason="Vinny Custom Role")
+                    await ctx.send(f"created a new role for ya: **{role_name}**.")
+                    
+                    # B. Handle Positioning (Only on creation)
+                    anchor_role_id = role_config.get("anchor_role_id")
+                    if anchor_role_id:
+                        anchor_role = ctx.guild.get_role(int(anchor_role_id))
+                        if anchor_role:
+                            try:
+                                # Place new role at position of anchor (which bumps anchor up, or pushes new down)
+                                # Logic: The safe bet is usually anchor.position - 1, but API varies.
+                                # Let's try to verify we are below the bot first.
+                                if ctx.guild.me.top_role.position > anchor_role.position:
+                                    # We want it BELOW the anchor.
+                                    target_pos = max(1, anchor_role.position - 1)
+                                    await role.edit(position=target_pos)
+                                else:
+                                    await ctx.send("warning: i can't move the role because the anchor is higher than me.")
+                            except Exception as e:
+                                logging.warning(f"Failed to move role: {e}")
+
+                if role not in ctx.author.roles:
+                    await ctx.author.add_roles(role)
+                
+                # --- 5. UPDATE COLORS ---
+                await role.edit(color=discord.Color(primary_int), reason="Vinny Color Update")
+                
+                if secondary_int is not None:
+                    try:
+                        url = f"/guilds/{ctx.guild.id}/roles/{role.id}"
+                        payload = {"secondary_color": secondary_int}
+                        await self.bot.http.request(discord.http.Route('PATCH', url), json=payload)
+                        await ctx.send(f"set **{role_name}** to **{color1}** and **{color2}**. nice gradient.")
+                    except Exception:
+                        await ctx.send(f"set to **{color1}**, but couldn't apply gradient (boosts required?).")
+                else:
+                    await ctx.send(f"set **{role_name}** to **{color1}**.")
+
+            except discord.Forbidden:
+                await ctx.send("i can't edit that role. is it higher than mine?")
+            except Exception as e:
+                logging.error("Role color command failed.", exc_info=True)
+                await ctx.send("something broke. my bad.")
+
+## ADMIN SETUP COMMAND FOR ROLE COLOR CONFIGURATION ###
+
+    @commands.command(name='setup_rolecolor')
+    @commands.has_permissions(manage_guild=True) # CHANGED: Now requires "Manage Server"
+    async def setup_rolecolor_command(self, ctx, channel: discord.TextChannel, anchor_role: discord.Role):
+        """
+        [Admin] Configures the !rolecolor command.
+        Usage: !setup_rolecolor #channel @RoleName
+        Vinny will only allow color changes in #channel and will place new roles BELOW @RoleName.
+        """
+        # Save the config as a "fact" for the Guild ID
+        config_data = {
+            "allowed_channel_id": str(channel.id),
+            "anchor_role_id": str(anchor_role.id)
+        }
+        
+        # We save this to the "profile" of the Guild itself so it persists
+        success = await self.bot.firestore_service.save_user_profile_fact(
+            str(ctx.guild.id), None, "role_config", json.dumps(config_data)
+        )
+        
+        if success:
+            await ctx.send(f"got it. i'll only let people change colors in {channel.mention}.\n"
+                           f"and any new roles i make will be placed directly below **{anchor_role.name}**.")
+        else:
+            await ctx.send("my brain's broken. couldn't save the settings.")
+    
+    # --- UPDATED ROLE COMMANDS ---
+
+    @commands.command(name='rolecolor')
+    async def rolecolor_command(self, ctx, color1: str, color2: str = None):
+        """
+        Sets a custom role color. Tracks the role by ID so you can rename it safely.
+        """
+        if not ctx.guild: return await ctx.send("server only, pal.")
+
+        # 1. SETUP & CHECKS
+        user_id = str(ctx.author.id)
+        guild_id = str(ctx.guild.id)
+        
+        # Load Config & Profile
+        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+        server_profile = await self.bot.firestore_service.get_user_profile(guild_id, None)
+        
+        # Check Allowed Channel
+        role_config = {}
+        if server_profile and "role_config" in server_profile:
+            try: role_config = json.loads(server_profile["role_config"])
+            except: pass
+            
+        allowed_channel_id = role_config.get("allowed_channel_id")
+        if allowed_channel_id and str(ctx.channel.id) != allowed_channel_id:
+            return await ctx.send(f"hey! take this over to <#{allowed_channel_id}>.")
+
+        # Check Permissions
+        if not ctx.guild.me.guild_permissions.manage_roles:
+            return await ctx.send("i need 'Manage Roles' permission first.")
+
+        # 2. PARSE COLORS
+        def parse_hex(hex_str):
+            hex_str = hex_str.strip('#')
+            try: return int(hex_str, 16)
+            except ValueError: return None
+
+        primary_int = parse_hex(color1)
+        if primary_int is None: return await ctx.send(f"'{color1}' ain't a valid hex code.")
+        secondary_int = parse_hex(color2) if color2 else None
+
+        # 3. FIND ROLE (SMART LOOKUP)
+        role = None
+        # Try ID first (Best for renamed roles)
+        if profile and "custom_role_id" in profile:
+            role = ctx.guild.get_role(int(profile["custom_role_id"]))
+        
+        # Fallback to Username (Legacy/First time)
+        if not role:
+            role = discord.utils.get(ctx.guild.roles, name=ctx.author.name)
+
+        async with ctx.typing():
+            try:
+                # 4. CREATE IF MISSING
+                if not role:
+                    role = await ctx.guild.create_role(name=ctx.author.name, reason="Vinny Custom Role")
+                    await ctx.send(f"created a new role for ya: **{role.name}**.")
+                    
+                    # Handle Positioning (Anchor)
+                    anchor_role_id = role_config.get("anchor_role_id")
+                    if anchor_role_id:
+                        anchor_role = ctx.guild.get_role(int(anchor_role_id))
+                        if anchor_role and ctx.guild.me.top_role.position > anchor_role.position:
+                             await role.edit(position=max(1, anchor_role.position - 1))
+
+                # 5. SAVE THE ID (CRITICAL STEP)
+                # This locks the role to the user so they can rename it later
+                await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
+
+                if role not in ctx.author.roles:
+                    await ctx.author.add_roles(role)
+                
+                # 6. APPLY COLORS
+                await role.edit(color=discord.Color(primary_int), reason="Vinny Color Update")
+                
+                if secondary_int is not None:
+                    try:
+                        url = f"/guilds/{ctx.guild.id}/roles/{role.id}"
+                        payload = {"secondary_color": secondary_int}
+                        await self.bot.http.request(discord.http.Route('PATCH', url), json=payload)
+                        await ctx.send(f"set **{role.name}** to **{color1}** and **{color2}**.")
+                    except Exception:
+                        await ctx.send(f"set **{role.name}** to **{color1}** (gradient failed).")
+                else:
+                    await ctx.send(f"set **{role.name}** to **{color1}**.")
+
+            except discord.Forbidden:
+                await ctx.send("i can't edit that role. is it higher than mine?")
+            except Exception:
+                logging.error("Role color command failed.", exc_info=True)
+                await ctx.send("something broke. my bad.")
+
+    @commands.command(name='rolename')
+    async def rolename_command(self, ctx, *, new_name: str):
+        """
+        Renames your custom color role.
+        Usage: !rolename Poopy Butt
+        """
+        if not ctx.guild: return await ctx.send("server only, pal.")
+        
+        user_id = str(ctx.author.id)
+        guild_id = str(ctx.guild.id)
+        
+        # 1. FIND THE ROLE
+        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+        role = None
+        
+        # Try ID
+        if profile and "custom_role_id" in profile:
+            role = ctx.guild.get_role(int(profile["custom_role_id"]))
+        
+        # Fallback to Name
+        if not role:
+            role = discord.utils.get(ctx.guild.roles, name=ctx.author.name)
+
+        if not role:
+            return await ctx.send("you don't have a custom role yet. use `!rolecolor` first.")
+
+        # 2. RENAME
+        old_name = role.name
+        try:
+            await role.edit(name=new_name, reason=f"Vinny Rename by {ctx.author.name}")
+            
+            # Save ID just in case it wasn't saved before
+            await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
+            
+            await ctx.send(f"changed your role from **{old_name}** to **{new_name}**. fancy.")
+        except discord.Forbidden:
+            await ctx.send("i can't rename that role. permissions issue?")
+        except Exception:
+            await ctx.send("something broke. couldn't rename it.")
+            
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))

@@ -8,7 +8,7 @@ import datetime
 from google.genai import types
 from utils import api_clients
 
-# --- 1. PORTRAIT REQUESTS (Unified "Old Style" Logic) ---
+# --- 1. PORTRAIT REQUESTS (Unified Logic) ---
 
 async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
@@ -20,10 +20,12 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
 
     guild_id = str(message.guild.id) if message.guild else None
     
-    # 1. Build the Description for ALL subjects
+    # 1. Build the Description
+    # We use "A high-quality artistic portrait" to allow styles like 'anime' or 'photo' to work.
     prompt_parts = [f"A high-quality artistic portrait featuring {len(target_users)} people."]
     
-    appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'gender', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
+    # Specific keywords we want to handle carefully
+    appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
 
     for i, user in enumerate(target_users, 1):
         user_id = str(user.id)
@@ -31,25 +33,32 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         
         appearance_facts = []
         other_facts = []
+        gender_fact = "Unknown Gender" # Default
 
         if user_profile:
             for key, value in user_profile.items():
-                if any(keyword in key.replace('_', ' ') for keyword in appearance_keywords): 
+                clean_key = key.replace('_', ' ')
+                
+                # FIX: Handle Gender Explicitly
+                if 'gender' in clean_key:
+                    gender_fact = value.title()
+                elif any(keyword in clean_key for keyword in appearance_keywords): 
                     appearance_facts.append(value)
                 else: 
-                    other_facts.append(f"{key.replace('_', ' ')} is {value}")
+                    other_facts.append(f"{clean_key} is {value}")
 
-        # Construct Subject Description
-        desc = f"**Subject {i} ({user.display_name}):**"
-        if appearance_facts:
-            desc += f" They have {', '.join(appearance_facts)}."
-        else:
-            desc += " Appearance is unknown (be creative)."
+        # Construct Subject Description (GRAMMAR FIX)
+       
+        desc = f"**Subject {i} ({user.display_name}):** Gender: {gender_fact}."
         
-        # Add a little flavor (random trait)
+        if appearance_facts:
+            desc += f" Appearance traits: {', '.join(appearance_facts)}."
+        else:
+            desc += " Appearance is undefined (be creative)."
+        
         if other_facts:
             random.shuffle(other_facts)
-            desc += f" Vibe: {other_facts[0]}."
+            desc += f" Vibe/Trivia: {other_facts[0]}."
             
         prompt_parts.append(desc)
 
@@ -67,7 +76,6 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
 # --- 2. SELF PORTRAITS (Wrapper) ---
 
 async def handle_paint_me_request(bot_instance, message: discord.Message):
-    """Wrapper that redirects 'paint me' to the unified portrait logic."""
     await handle_portrait_request(bot_instance, message, [message.author], details="")
 
 
@@ -76,8 +84,6 @@ async def handle_paint_me_request(bot_instance, message: discord.Message):
 async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
     """
     Generates an image using Gemini to rewrite the prompt.
-    NUCLEAR CONTEXT FIX: Forces AI to discard history unless explicitly asked to edit.
-    NO SAFETY FILTER: Keeps the prompt "raw" and "fun".
     """
     async with message.channel.typing():
         # 1. Rewriter Instruction
@@ -86,8 +92,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             context_block = (
                 f"\n## HISTORY (OLD GARBAGE - IGNORE MOST OF THE TIME):\n"
                 f"The previous image was: \"{previous_prompt}\".\n"
-                f"**STRICT RULE:** Only use this history if the User Request contains EDIT keywords "
-                f"(e.g., 'change', 'add', 'remove', 'make it', 'fix', 'turn him into').\n"
+                f"**STRICT RULE:** Only use this history if the User Request contains EDIT keywords.\n"
                 f"**OTHERWISE: THROW THIS HISTORY AWAY AND START FRESH.**\n"
             )
 
@@ -99,9 +104,10 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             f"2. **VINNY (YOU):** Robust middle-aged Italian-American man, long dark hair, beard, pirate coat.\n\n"
             "## CRITICAL INSTRUCTIONS:\n"
             "1. **NEW SUBJECT = NEW PROMPT:** If the user asks for 'a dog' and the history was 'a cat', DELETE THE CAT. Output ONLY 'a dog'.\n"
-            "2. **CONTRADICTION:** If the request contradicts the history, the REQUEST WINS. Delete the old details.\n"
-            "3. **STYLE:** Preserve the user's requested style (anime, oil, photo). Do not force 'cinematic' on everything.\n"
-            "4. **KEEP THE CHAOS:** If the user asks for something weird, gross, or chaotic (e.g. 'pooping', 'screaming', 'ugly'), **INCLUDE IT** in the prompt. Do not sanitize it. Let the image generator deal with it.\n\n"
+            "2. **CONTRADICTION:** If the request contradicts the history, the REQUEST WINS.\n"
+            "3. **GENDER PRIORITY:** If the prompt specifies a gender (e.g. 'Gender: Male', 'draw a man'), YOU MUST OBEY IT. Do not let hair length or clothes override the gender.\n"
+            "4. **STYLE:** Preserve the user's requested style (anime, oil, photo).\n"
+            "5. **KEEP THE CHAOS:** If the user asks for something weird, gross, or chaotic, INCLUDE IT.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
             "Provide a single JSON object with keys: \"core_subject\" (2-5 words) and \"enhanced_prompt\" (full description)."
