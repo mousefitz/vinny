@@ -837,108 +837,134 @@ class VinnyLogic(commands.Cog):
     async def rolecolor_command(self, ctx, color1: str, color2: str = None):
         """
         Sets a custom role color.
-        Uses RAW HTTP REQUESTS to force Gradients even if the library fights back.
+        Uses Hybrid logic: Tries Official API first, falls back to Raw API if library is old.
+        Includes HueTweaker's 'Black Fix' for visibility.
         """
         if not ctx.guild: return await ctx.send("server only, pal.")
 
-        # 1. PERMISSIONS & CONFIG
+        # 1. PERMISSIONS & CONFIG CHECK
         if not ctx.guild.me.guild_permissions.manage_roles:
             return await ctx.send("i need 'Manage Roles' permission first.")
 
         # Check Channel Config
         server_profile = await self.bot.firestore_service.get_user_profile(str(ctx.guild.id), None)
-        if server_profile:
-            try:
-                conf = json.loads(server_profile.get("role_config", "{}"))
-                if conf.get("allowed_channel_id") and str(ctx.channel.id) != conf["allowed_channel_id"]:
-                    return await ctx.send(f"go to <#{conf['allowed_channel_id']}> for this.")
+        role_config = {}
+        if server_profile and "role_config" in server_profile:
+            try: role_config = json.loads(server_profile["role_config"])
             except: pass
+            
+        allowed_channel_id = role_config.get("allowed_channel_id")
+        if allowed_channel_id and str(ctx.channel.id) != allowed_channel_id:
+            return await ctx.send(f"hey! take this over to <#{allowed_channel_id}>.")
 
-        # 2. PARSE COLORS (HueTweaker Logic)
-        def parse_hex(hex_str):
+        # 2. CLEAN PARSING (Removes garbage like '0x' or extra #)
+        def clean_and_parse(hex_str):
             if not hex_str: return None
-            clean = hex_str.strip('#').replace('0x', '')
-            try:
-                int(clean, 16)
-                if len(clean) == 3: clean = "".join([c*2 for c in clean]) # FFF -> FFFFFF
-                return clean
-            except: return None
+            # Regex to keep only valid hex characters
+            clean = re.sub(r"[^a-fA-F0-9]", "", hex_str)
+            # Expand shorthand (e.g. FFF -> FFFFFF)
+            if len(clean) == 3: clean = "".join([c*2 for c in clean])
+            try: return int(clean, 16)
+            except ValueError: return None
 
-        hex1 = parse_hex(color1)
-        hex2 = parse_hex(color2)
+        val1 = clean_and_parse(color1)
+        val2 = clean_and_parse(color2)
 
-        if not hex1: return await ctx.send(f"'{color1}' ain't a valid hex code.")
+        if val1 is None: return await ctx.send(f"'{color1}' ain't a valid hex code.")
 
-        # 3. BLACK FIX (Transparency Patch)
-        # Discord treats #000000 as invisible. HueTweaker changes it to #000001.
-        if hex1 == "000000": hex1 = "000001"
-        if hex2 == "000000": hex2 = "000001"
+        # 3. THE "BLACK FIX" (From HueTweaker utils/color_parse.py)
+        # 000000 is transparent in Discord. We map it to 000001 (almost black) so it shows up.
+        is_fixed = False
+        if val1 == 0: val1 = 1; is_fixed = True
+        if val2 == 0: val2 = 1; is_fixed = True
 
-        val1 = int(hex1, 16)
-        val2 = int(hex2, 16) if hex2 else None
-
-        # 4. GET ROLE
-        profile = await self.bot.firestore_service.get_user_profile(str(ctx.author.id), str(ctx.guild.id))
+        # 4. FIND OR CREATE ROLE
+        user_id = str(ctx.author.id)
+        guild_id = str(ctx.guild.id)
+        
+        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
         role = None
         
-        # Try ID first
+        # Try finding by ID first
         if profile and "custom_role_id" in profile:
             role = ctx.guild.get_role(int(profile["custom_role_id"]))
-        
         # Fallback to Name
         if not role:
             role = discord.utils.get(ctx.guild.roles, name=ctx.author.name)
 
         async with ctx.typing():
             try:
-                # 5. CREATE (If needed)
+                # --- STEP A: CREATE ---
                 if not role:
-                    # Create basic role first (Safe Mode)
-                    role = await ctx.guild.create_role(name=ctx.author.name, reason="Vinny Custom Role")
-                    await self.bot.firestore_service.save_user_profile_fact(str(ctx.author.id), str(ctx.guild.id), "custom_role_id", str(role.id))
-                    await ctx.send(f"created role: **{role.name}**")
-                    
-                    # Position Anchor
-                    if server_profile:
-                        conf = json.loads(server_profile.get("role_config", "{}"))
-                        if conf.get("anchor_role_id"):
-                            anchor = ctx.guild.get_role(int(conf["anchor_role_id"]))
-                            if anchor and ctx.guild.me.top_role > anchor:
-                                await role.edit(position=max(1, anchor.position - 1))
+                    try:
+                        # Try Native Creation
+                        role = await ctx.guild.create_role(
+                            name=ctx.author.name,
+                            color=discord.Color(val1),
+                            secondary_color=discord.Color(val2) if val2 is not None else None,
+                            reason="Vinny Custom Role"
+                        )
+                    except TypeError:
+                        # Fallback for older library (ignore secondary_color for now)
+                        role = await ctx.guild.create_role(
+                            name=ctx.author.name,
+                            color=discord.Color(val1),
+                            reason="Vinny Custom Role"
+                        )
 
-                # Ensure User has it
+                    # Save ID
+                    await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
+                    await ctx.send(f"created role: **{role.name}**")
+
+                    # Anchor Position Logic
+                    anchor_id = role_config.get("anchor_role_id")
+                    if anchor_id:
+                        anchor = ctx.guild.get_role(int(anchor_id))
+                        if anchor and ctx.guild.me.top_role > anchor:
+                            await role.edit(position=max(1, anchor.position - 1))
+
+                # Ensure User has Role
                 if role not in ctx.author.roles:
                     await ctx.author.add_roles(role)
 
-                # 6. RAW UPDATE (The Magic Part)
-                # We manually build the JSON packet.
-                url = f"/guilds/{ctx.guild.id}/roles/{role.id}"
-                
-                payload = {
-                    "color": val1,
-                    "name": role.name
-                }
-                
-                # If we have a second color, we send the gradient key.
-                if val2 is not None:
-                    payload["secondary_color"] = val2 
-                else:
-                    # If going back to solid, we must explicit nullify the secondary color
-                    payload["secondary_color"] = None
+                # --- STEP B: UPDATE (The Hybrid Fix) ---
+                try:
+                    # METHOD 1: Official Library Call (HueTweaker style)
+                    await role.edit(
+                        color=discord.Color(val1),
+                        secondary_color=discord.Color(val2) if val2 is not None else None,
+                        reason="Vinny Color Update"
+                    )
+                except TypeError:
+                    # METHOD 2: Raw API Fallback (The "Nuclear" Option)
+                    # Use this if Method 1 crashes with "unexpected keyword argument"
+                    url = f"/guilds/{ctx.guild.id}/roles/{role.id}"
+                    payload = {"color": val1, "name": role.name}
+                    
+                    if val2 is not None:
+                        payload["secondary_color"] = val2
+                    else:
+                        payload["secondary_color"] = None # Reset to solid
+                    
+                    # Send raw packet to Discord
+                    await self.bot.http.request(discord.http.Route('PATCH', url), json=payload)
 
-                # SEND IT
-                await self.bot.http.request(discord.http.Route('PATCH', url), json=payload)
+                # --- CONFIRMATION ---
+                c1_hex = f"#{val1:06X}"
+                c2_hex = f"#{val2:06X}" if val2 is not None else None
 
                 if val2:
-                    await ctx.send(f"set **{role.name}** to **#{hex1}** -> **#{hex2}** (Gradient).")
+                    await ctx.send(f"set **{role.name}** to gradient: **{c1_hex}** -> **{c2_hex}**.")
                 else:
-                    await ctx.send(f"set **{role.name}** to **#{hex1}** (Solid).")
+                    msg = f"set **{role.name}** to **{c1_hex}**."
+                    if is_fixed: msg += " (adjusted pure black to visible black)"
+                    await ctx.send(msg)
 
             except discord.Forbidden:
-                await ctx.send("i can't edit that role. check the hierarchy.")
+                await ctx.send("i can't edit that role. is it higher than mine?")
             except Exception as e:
-                logging.error(f"Role Error: {e}")
-                await ctx.send(f"discord rejected it. error: {e}")
+                logging.error(f"Role Error: {e}", exc_info=True)
+                await ctx.send("something broke. check the logs.")
                 
 ## ADMIN SETUP COMMAND FOR ROLE COLOR CONFIGURATION ###
 
