@@ -836,16 +836,15 @@ class VinnyLogic(commands.Cog):
     @commands.command(name='rolecolor')
     async def rolecolor_command(self, ctx, color1: str, color2: str = None):
         """
-        Sets a custom role color. Tracks the role by ID.
-        Uses a raw API update for gradients to ensure atomicity.
+        Sets a custom role color. Supports Gradients (HueTweaker Style).
         """
         if not ctx.guild: return await ctx.send("server only, pal.")
 
-        # 1. SETUP & CHECKS
+        # 1. SETUP & CONFIG CHECK
         user_id = str(ctx.author.id)
         guild_id = str(ctx.guild.id)
         
-        # Load Config
+        # Check Config (Allowed Channel)
         server_profile = await self.bot.firestore_service.get_user_profile(guild_id, None)
         role_config = {}
         if server_profile and "role_config" in server_profile:
@@ -861,19 +860,31 @@ class VinnyLogic(commands.Cog):
 
         # 2. PARSE COLORS
         def parse_hex(hex_str):
+            if not hex_str: return None
             hex_str = hex_str.strip('#')
+            
+            # Fix: Discord treats 000000 as transparent/invisible.
+            # We map it to 000001 (almost black) so it actually renders.
+            if hex_str == "000000": 
+                hex_str = "000001"
+                
             try: return int(hex_str, 16)
             except ValueError: return None
 
         primary_int = parse_hex(color1)
         if primary_int is None: return await ctx.send(f"'{color1}' ain't a valid hex code.")
-        secondary_int = parse_hex(color2) if color2 else None
+        
+        secondary_int = parse_hex(color2) # Can be None if user didn't provide it
 
         # 3. FIND ROLE
         profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
         role = None
+        
+        # Try finding by saved ID first (renaming support)
         if profile and "custom_role_id" in profile:
             role = ctx.guild.get_role(int(profile["custom_role_id"]))
+        
+        # Fallback to username
         if not role:
             role = discord.utils.get(ctx.guild.roles, name=ctx.author.name)
 
@@ -881,52 +892,47 @@ class VinnyLogic(commands.Cog):
             try:
                 # 4. CREATE IF MISSING
                 if not role:
-                    role = await ctx.guild.create_role(name=ctx.author.name, reason="Vinny Custom Role")
+                    # We pass colors during creation to avoid double-API calls
+                    role = await ctx.guild.create_role(
+                        name=ctx.author.name,
+                        color=discord.Color(primary_int),
+                        secondary_color=discord.Color(secondary_int) if secondary_int is not None else None,
+                        reason="Vinny Custom Role"
+                    )
                     await ctx.send(f"created a new role for ya: **{role.name}**.")
                     
-                    # Save ID
+                    # Save ID to database
                     await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
 
-                    # Position
+                    # Handle Positioning (Anchor)
                     anchor_role_id = role_config.get("anchor_role_id")
                     if anchor_role_id:
                         anchor_role = ctx.guild.get_role(int(anchor_role_id))
                         if anchor_role and ctx.guild.me.top_role.position > anchor_role.position:
                              await role.edit(position=max(1, anchor_role.position - 1))
 
+                # Ensure user has the role
                 if role not in ctx.author.roles:
                     await ctx.author.add_roles(role)
                 
-                # 5. SINGLE ATOMIC UPDATE (The Fix)
-                # Instead of using role.edit() for primary and requests for secondary,
-                # we send ONE raw packet with everything.
-                url = f"/guilds/{ctx.guild.id}/roles/{role.id}"
-                
-                payload = {
-                    "color": primary_int,
-                    "name": role.name # Keep name consistent
-                }
-                
-                if secondary_int is not None:
-                    # Try common 2026 API keys for gradients
-                    payload["gradient_color"] = secondary_int 
-                    payload["secondary_color"] = secondary_int
-                
-                # Send Raw Request
-                await self.bot.http.request(discord.http.Route('PATCH', url), json=payload)
+                # 5. EDIT ROLE
+                # We use the native 'secondary_color' argument.
+                await role.edit(
+                    color=discord.Color(primary_int),
+                    secondary_color=discord.Color(secondary_int) if secondary_int is not None else None,
+                    reason="Vinny Color Update"
+                )
                 
                 if secondary_int:
                     await ctx.send(f"set **{role.name}** to **{color1}** - **{color2}**. gradient applied.")
                 else:
                     await ctx.send(f"set **{role.name}** to **{color1}**.")
 
+            except TypeError:
+                await ctx.send("error: my internal library (discord.py) is too old to support gradients. please update me.")
             except discord.Forbidden:
-                await ctx.send("i can't edit that role. permissions issue?")
-            except discord.HTTPException as e:
-                # Log the specific API error if Discord rejects the gradient
-                logging.error(f"Role Update Failed: {e}")
-                await ctx.send(f"discord rejected the update. error: {e.status} (maybe the boosts aren't active?)")
-            except Exception:
+                await ctx.send("i can't edit that role. is it higher than mine?")
+            except Exception as e:
                 logging.error("Role color command failed.", exc_info=True)
                 await ctx.send("something broke. couldn't paint the role.")
 
