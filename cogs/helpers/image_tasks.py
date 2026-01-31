@@ -13,7 +13,6 @@ from utils import api_clients
 async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
     Generates a portrait for ONE or MULTIPLE users using Profile-based logic.
-    Accepts a LIST of users.
     """
     if not isinstance(target_users, list):
         target_users = [target_users]
@@ -21,25 +20,31 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
     guild_id = str(message.guild.id) if message.guild else None
     
     # 1. Build the Description
-    # We use "A high-quality artistic portrait" to allow styles like 'anime' or 'photo' to work.
     prompt_parts = [f"A high-quality artistic portrait featuring {len(target_users)} people."]
     
-    # Specific keywords we want to handle carefully
     appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
 
     for i, user in enumerate(target_users, 1):
+        # --- FIX 1: RESTORE SELF-PORTRAIT LOGIC ---
+        if user.id == bot_instance.user.id:
+            desc = (f"**Subject {i} (Vinny):** "
+                    "Appearance: Robust middle-aged Italian-American man, long dark hair, messy beard, wearing a worn pirate coat or leather jacket. "
+                    "Vibe: Chaotic, confident, slightly unhinged.")
+            prompt_parts.append(desc)
+            continue
+        # ------------------------------------------
+
         user_id = str(user.id)
         user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
         
         appearance_facts = []
         other_facts = []
-        gender_fact = "Unknown Gender" # Default
+        gender_fact = None  # Changed default from "Unknown" to None
 
         if user_profile:
             for key, value in user_profile.items():
                 clean_key = key.replace('_', ' ')
                 
-                # FIX: Handle Gender Explicitly
                 if 'gender' in clean_key:
                     gender_fact = value.title()
                 elif any(keyword in clean_key for keyword in appearance_keywords): 
@@ -47,14 +52,18 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 else: 
                     other_facts.append(f"{clean_key} is {value}")
 
-        # Construct Subject Description (GRAMMAR FIX)
-       
-        desc = f"**Subject {i} ({user.display_name}):** Gender: {gender_fact}."
+        # --- FIX 2: ONLY INJECT GENDER IF KNOWN ---
+        # If we don't know the gender, we simply DON'T mention it. 
+        # This stops the AI from freaking out about "Unknown Gender".
+        desc = f"**Subject {i} ({user.display_name}):** "
+        
+        if gender_fact and "unknown" not in gender_fact.lower():
+            desc += f"Gender: {gender_fact}. "
         
         if appearance_facts:
-            desc += f" Appearance traits: {', '.join(appearance_facts)}."
+            desc += f"Appearance traits: {', '.join(appearance_facts)}."
         else:
-            desc += " Appearance is undefined (be creative)."
+            desc += "Appearance is undefined (be creative)."
         
         if other_facts:
             random.shuffle(other_facts)
