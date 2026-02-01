@@ -8,91 +8,127 @@ import datetime
 from google.genai import types
 from utils import api_clients
 
-# --- 1. PORTRAIT REQUESTS (Unified Logic) ---
+from discord.ext import commands
+
+# Setup Logger
+logger = logging.getLogger(__name__)
 
 async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
     Generates an artistic depiction for ONE or MULTIPLE users.
-    Focuses on dynamic scenes, environmental backgrounds, and character interests
-    rather than just static 'mugshot' style portraits.
+    Includes:
+    1. Strict Server Isolation (No cross-server data leaks).
+    2. Data Sanitation (Removes User IDs/Mentions from prompts).
+    3. Robust Error Logging.
     """
     if not isinstance(target_users, list):
         target_users = [target_users]
 
-    guild_id = str(message.guild.id) if message.guild else None
-    
-    # 1. Setup the Scene (Flexible, not just "Portrait")
-    prompt_parts = [
-        f"A high-quality artistic depiction of {len(target_users)} people.",
-        "The composition should be natural, dynamic, or environmental (not necessarily a static pose).",
-        "Incorporate the subjects' interests or vibes into the background and activity."
-    ]
-    
-    appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
+    # 1. SETUP & CONTEXT (Strict Isolation)
+    if message.guild:
+        guild_id = str(message.guild.id)
+        server_name = message.guild.name
+    else:
+        guild_id = None
+        server_name = "Private Context"
 
-    for i, user in enumerate(target_users, 1):
-        # --- A. SELF-PORTRAIT OVERRIDE (Vinny) ---
-        if user.id == bot_instance.user.id:
-            desc = (f"**Subject {i} (Vinny):** "
-                    "Appearance: Robust middle-aged Italian-American man, long dark hair, messy beard, wearing a worn pirate coat or leather jacket. "
-                    "Activity/Vibe: Looks confident, chaotic, perhaps holding a tool or a drink, slightly unhinged but friendly.")
-            prompt_parts.append(desc)
-            continue
-        
-        # --- B. REGULAR USER LOOKUP ---
-        user_id = str(user.id)
-        user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
-        
-        appearance_facts = []
-        other_facts = []
-        gender_fact = None
+    # Log start of request
+    logger.info(f"Starting Paint Request for {len(target_users)} users in {server_name} ({guild_id})")
 
-        if user_profile:
-            for key, value in user_profile.items():
-                clean_key = key.replace('_', ' ')
-                
-                # Sort facts into Categories
-                if 'gender' in clean_key:
-                    gender_fact = value.title()
-                elif any(keyword in clean_key for keyword in appearance_keywords): 
-                    appearance_facts.append(value)
-                else: 
-                    # Collect interests/trivia for the background
-                    other_facts.append(value)
+    try:
+        # 2. BUILD PROMPT
+        prompt_parts = [
+            f"A high-quality artistic depiction of {len(target_users)} people.",
+            "The composition should be natural, dynamic, or environmental.",
+            f"Setting: A scene consistent with the vibe of {server_name}." 
+        ]
+        
+        appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
 
-        # --- C. CONSTRUCT SUBJECT DESCRIPTION ---
-        desc = f"**Subject {i} ({user.display_name}):** "
-        
-        # Gender (Only if known)
-        if gender_fact and "unknown" not in gender_fact.lower():
-            desc += f"Gender: {gender_fact}. "
-        
-        # Appearance
-        if appearance_facts:
-            desc += f"Visual traits: {', '.join(appearance_facts)}. "
-        else:
-            desc += "Visual traits: Undefined (be creative). "
-        
-        # Background / Activity Elements (The "Flavor")
-        if other_facts:
-            # Shuffle and pick up to 3 facts to populate the scene
-            random.shuffle(other_facts)
-            selected_facts = other_facts[:3]
-            desc += f"Suggested background elements or activities based on: {', '.join(selected_facts)}."
+        for i, user in enumerate(target_users, 1):
+            # CLEAR VARIABLES (Prevent Loop Bleed)
+            appearance_facts = []
+            other_facts = []
+            gender_fact = None
+            desc = ""
+
+            # --- A. SELF-PORTRAIT OVERRIDE (Vinny) ---
+            if user.id == bot_instance.user.id:
+                desc = (f"**Subject {i} (Vinny):** "
+                        "Appearance: Robust middle-aged Italian-American man, long dark hair, messy beard, wearing a worn pirate coat or leather jacket. "
+                        "Activity/Vibe: Chaotic, confident, holding a tool or drink.")
+                prompt_parts.append(desc)
+                continue
             
-        prompt_parts.append(desc)
+            # --- B. USER LOOKUP (Scoped to Guild) ---
+            user_id = str(user.id)
+            user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
+            
+            if user_profile:
+                for key, value in user_profile.items():
+                    clean_value = str(value).strip()
+                    clean_key = key.replace('_', ' ')
 
-    # 2. Add Specific User Request Details (Overrides)
-    if details:
-        prompt_parts.append(f"**Specific Scene Instruction:** {details}")
+                    # --- SANITATION FILTER ---
+                    # Reject if the fact contains a long ID string (17+ digits) or mention syntax
+                    # This fixes the "strings of userids" issue.
+                    if re.search(r'\d{17,}', clean_value) or re.search(r'<@!?&?\d+>', clean_value):
+                        continue
+                    # -------------------------
+                    
+                    if 'gender' in clean_key:
+                        gender_fact = clean_value.title()
+                    elif any(keyword in clean_key for keyword in appearance_keywords): 
+                        appearance_facts.append(clean_value)
+                    else: 
+                        other_facts.append(clean_value)
 
-    # 3. Final Prompt Assembly
-    final_prompt_text = " ".join(prompt_parts)
-    
-    # 4. Generate
-    await handle_image_request(bot_instance, message, final_prompt_text, previous_prompt=None)
+            # --- C. SUBJECT DESCRIPTION ---
+            desc = f"**Subject {i} ({user.display_name}):** "
+            
+            # Gender
+            if gender_fact and "unknown" not in gender_fact.lower():
+                desc += f"Gender: {gender_fact}. "
+            
+            # Visuals
+            if appearance_facts:
+                desc += f"Visuals: {', '.join(appearance_facts)}. "
+            else:
+                desc += "Visuals: Undefined (be creative). "
+            
+            # Activity / Vibe (From Interests)
+            if other_facts:
+                random.shuffle(other_facts)
+                selected_facts = other_facts[:3]
+                desc += f"Action/Vibe based on: {', '.join(selected_facts)}."
+                
+            prompt_parts.append(desc)
 
+        # 3. USER DETAILS
+        if details:
+            prompt_parts.append(f"**Specific Instruction:** {details}")
 
+        # 4. FINALIZE PROMPT
+        final_prompt_text = " ".join(prompt_parts)
+        
+        # LOG THE PROMPT (For Debugging)
+        logger.info(f"GENERATING IMAGE PROMPT: {final_prompt_text}")
+
+        # 5. EXECUTE (Stateless)
+        # previous_prompt=None prevents LLM context leaks
+        await handle_image_request(
+            bot_instance, 
+            message, 
+            final_prompt_text, 
+            previous_prompt=None 
+        )
+
+    except Exception as e:
+        # ROBUST ERROR LOGGING
+        error_msg = f"PAINT REQUEST FAILED in {server_name}: {e}"
+        logger.error(error_msg, exc_info=True) # exc_info=True prints the full traceback
+        
+       
 # --- 2. SELF PORTRAITS (Wrapper) ---
 
 async def handle_paint_me_request(bot_instance, message: discord.Message):
