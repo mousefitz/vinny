@@ -155,23 +155,20 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
         prompt_rewriter_instruction = (
             "You are an AI Art Director. Refine the user's request into an image prompt.\n\n"
             f"{context_block}\n"
-            "## REFERENCE GUIDE:\n"
-            f"1. **THE USER:** '{message.author.display_name}'.\n"
-            f"2. **VINNY (YOU):** Robust middle-aged Italian-American man, long dark hair, beard, pirate coat.\n\n"
             "## CRITICAL INSTRUCTIONS:\n"
-            "1. **NEW SUBJECT = NEW PROMPT:** If the user asks for 'a dog' and the history was 'a cat', DELETE THE CAT. Output ONLY 'a dog'.\n"
-            "2. **CONTRADICTION:** If the request contradicts the history, the REQUEST WINS.\n"
-            "3. **GENDER PRIORITY:** If the prompt specifies a gender (e.g. 'Gender: Male', 'draw a man'), YOU MUST OBEY IT. Do not let hair length or clothes override the gender.\n"
-            "4. **STYLE:** Preserve the user's requested style (anime, oil, photo).\n"
-            "5. **KEEP THE CHAOS:** If the user asks for something weird, gross, or chaotic, INCLUDE IT.\n\n"
+            "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested. If they ask for 'Vinny eating a tire', that is the focus.\n"
+            "2. **STYLE:** Pick a unique style (e.g., Cyberpunk, Oil Painting, 90s Anime) unless the user requested one.\n"
+            "3. **SYNC:** Your `reply_text` must describe the image you are creating.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
-            "Provide a single JSON object with keys: \"core_subject\" (2-5 words) and \"enhanced_prompt\" (full description)."
+            "Provide a single JSON object with 3 keys:\n"
+            "- \"core_subject\" (Short title, e.g. 'The Pizza King')\n"
+            "- \"enhanced_prompt\" (The detailed image generation prompt)\n"
+            "- \"reply_text\" (Your chaotic/flirty response to the user describing what you painted)"
         )
-
+        
         try:
             # 2. Generate Enhanced Prompt
-            # Safety Settings OFF for the REWRITER so it doesn't block the prompt text
             safety_settings_off = [
                 types.SafetySetting(category=cat, threshold="OFF")
                 for cat in [
@@ -187,7 +184,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 contents=[prompt_rewriter_instruction],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.7, # Higher temp for more creativity
+                    temperature=0.7, 
                     safety_settings=safety_settings_off
                 )
             )
@@ -197,9 +194,11 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 return None
 
             data = json.loads(response.text)
+            # EXTRACT THE DATA
             enhanced_prompt = data.get("enhanced_prompt", image_prompt)
-            core_subject = data.get("core_subject", "something weird")
-            
+            core_subject = data.get("core_subject", "Artistic Chaos")
+            reply_text = data.get("reply_text", "Here is that image you wanted.") # This is the new sync part
+
             # 3. Announce
             thinking_messages = [
                 "aight, gimme a sec. i gotta find my brushes.",
@@ -221,6 +220,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             await message.channel.send(random.choice(thinking_messages))
 
             # 4. Generate the Image
+            # Using your specific api_clients function
             image_obj, count = await api_clients.generate_image_with_genai(
                 bot_instance.gemini_client,
                 enhanced_prompt,
@@ -235,19 +235,21 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 except Exception: pass
                 
                 file = discord.File(image_obj, filename="vinny_art.png")
+                
+                # Create the Embed
                 embed = discord.Embed(title=f"🎨 {core_subject.title()}", color=discord.Color.dark_teal())
                 embed.set_image(url="attachment://vinny_art.png")
-                
                 clean_prompt = enhanced_prompt[:1000].replace("\n", " ")
                 embed.set_footer(text=f"{clean_prompt} | Requested by {message.author.display_name}")
                 
-                await message.channel.send(file=file, embed=embed)
+                # SEND THE REPLY TEXT AND THE IMAGE TOGETHER
+                await message.channel.send(content=reply_text.lower(), file=file, embed=embed)
                 return enhanced_prompt
             
             else:
                 await message.channel.send("i spilled the paint. something went wrong.")
                 return None
-
+            
         except Exception as e:
             logging.error(f"Image generation failed: {e}")
             await message.channel.send("my brain's fried. i can't paint right now.")
