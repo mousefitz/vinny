@@ -12,73 +12,84 @@ from utils import api_clients
 
 async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
-    Generates a portrait for ONE or MULTIPLE users using Profile-based logic.
+    Generates an artistic depiction for ONE or MULTIPLE users.
+    Focuses on dynamic scenes, environmental backgrounds, and character interests
+    rather than just static 'mugshot' style portraits.
     """
     if not isinstance(target_users, list):
         target_users = [target_users]
 
     guild_id = str(message.guild.id) if message.guild else None
     
-    # 1. Build the Description
-    prompt_parts = [f"A high-quality artistic portrait featuring {len(target_users)} people."]
+    # 1. Setup the Scene (Flexible, not just "Portrait")
+    prompt_parts = [
+        f"A high-quality artistic depiction of {len(target_users)} people.",
+        "The composition should be natural, dynamic, or environmental (not necessarily a static pose).",
+        "Incorporate the subjects' interests or vibes into the background and activity."
+    ]
     
     appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
 
     for i, user in enumerate(target_users, 1):
-        # --- FIX 1: RESTORE SELF-PORTRAIT LOGIC ---
+        # --- A. SELF-PORTRAIT OVERRIDE (Vinny) ---
         if user.id == bot_instance.user.id:
             desc = (f"**Subject {i} (Vinny):** "
                     "Appearance: Robust middle-aged Italian-American man, long dark hair, messy beard, wearing a worn pirate coat or leather jacket. "
-                    "Vibe: Chaotic, confident, slightly unhinged.")
+                    "Activity/Vibe: Looks confident, chaotic, perhaps holding a tool or a drink, slightly unhinged but friendly.")
             prompt_parts.append(desc)
             continue
-        # ------------------------------------------
-
+        
+        # --- B. REGULAR USER LOOKUP ---
         user_id = str(user.id)
         user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
         
         appearance_facts = []
         other_facts = []
-        gender_fact = None  # Changed default from "Unknown" to None
+        gender_fact = None
 
         if user_profile:
             for key, value in user_profile.items():
                 clean_key = key.replace('_', ' ')
                 
+                # Sort facts into Categories
                 if 'gender' in clean_key:
                     gender_fact = value.title()
                 elif any(keyword in clean_key for keyword in appearance_keywords): 
                     appearance_facts.append(value)
                 else: 
-                    other_facts.append(f"{clean_key} is {value}")
+                    # Collect interests/trivia for the background
+                    other_facts.append(value)
 
-        # --- FIX 2: ONLY INJECT GENDER IF KNOWN ---
-        # If we don't know the gender, we simply DON'T mention it. 
-        # This stops the AI from freaking out about "Unknown Gender".
+        # --- C. CONSTRUCT SUBJECT DESCRIPTION ---
         desc = f"**Subject {i} ({user.display_name}):** "
         
+        # Gender (Only if known)
         if gender_fact and "unknown" not in gender_fact.lower():
             desc += f"Gender: {gender_fact}. "
         
+        # Appearance
         if appearance_facts:
-            desc += f"Appearance traits: {', '.join(appearance_facts)}."
+            desc += f"Visual traits: {', '.join(appearance_facts)}. "
         else:
-            desc += "Appearance is undefined (be creative)."
+            desc += "Visual traits: Undefined (be creative). "
         
+        # Background / Activity Elements (The "Flavor")
         if other_facts:
+            # Shuffle and pick up to 3 facts to populate the scene
             random.shuffle(other_facts)
-            desc += f" Vibe/Trivia: {other_facts[0]}."
+            selected_facts = other_facts[:3]
+            desc += f"Suggested background elements or activities based on: {', '.join(selected_facts)}."
             
         prompt_parts.append(desc)
 
-    # 2. Add General Details
+    # 2. Add Specific User Request Details (Overrides)
     if details:
-        prompt_parts.append(f"**Scene Details:** {details}")
+        prompt_parts.append(f"**Specific Scene Instruction:** {details}")
 
     # 3. Final Prompt Assembly
     final_prompt_text = " ".join(prompt_parts)
     
-    # 4. Pass to the Image Generator
+    # 4. Generate
     await handle_image_request(bot_instance, message, final_prompt_text, previous_prompt=None)
 
 
