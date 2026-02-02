@@ -48,6 +48,11 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
                 
     user_name_to_use = await bot_instance.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
     
+    context_snippet = ""
+    async for msg in message.channel.history(limit=3, before=message):
+        if msg.content:
+            context_snippet = f"{msg.author.display_name}: {msg.content}\n" + context_snippet
+
     reply_prompt = (
         f"{bot_instance.personality_instruction}\n\n"
         f"# --- CONVERSATION CONTEXT ---\n"
@@ -200,19 +205,22 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                     f"{tone_instruction}\n\n"
                     f"## KNOWN USER FACTS:\n{facts_str}\n\n"
                     f"The user '{actual_display_name}' is talking directly to you. "
-                    f"Respond ONLY to their last message: \"{cleaned_content}\". "
-                    f"Just reply naturally to what they just said."
+                    f"Current Message: \"{cleaned_content}\".\n\n"
+                    f"## TASK:\n"
+                    f"1. Respond naturally to their message.\n"
+                    f"2. **CONTEXT MATTERS:** Look at the chat history above. If we were already discussing a topic (e.g., a fight, a joke, a story), CONTINUE that flow. Do not reset the conversation."
                 )
 
         if is_autonomous:
             final_instruction_text = (
                 f"{tone_instruction}\n\n"
-                f"Your mood is {bot_instance.current_mood}. You are 'hanging out' in this chat server and just reading the messages above. "
-                "Your task is to chime in naturally as if you were just another user.\n"
-                "RULES:\n"
-                "1. DO NOT summarize the conversation.\n"
-                "2. Pick ONE specific thing a user said above and react to it directly.\n"
-                "3. Be brief."
+                f"Your mood is {bot_instance.current_mood}. You are 'hanging out' in this chat server and just reading the stream of messages above.\n\n"
+                "## YOUR TASK:\n"
+                "Chime in naturally as if you were just another user sitting on the couch with them.\n\n"
+                "## RULES:\n"
+                "1. **READ THE ROOM:** Don't just react to the very last sentence. Look at the last few messages to understand the *topic* (are they fighting? joking? telling a story?).\n"
+                "2. **ADD VALUE:** Don't just say 'lol' or 'cool'. Add a joke, an opinion, or a question that keeps the vibe going.\n"
+                "3. **BE BRIEF:** casual, lowercase, short."
             )
 
         participants = set()
