@@ -20,6 +20,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
     1. Strict Server Isolation (No cross-server data leaks).
     2. Data Sanitation (Removes User IDs/Mentions from prompts).
     3. Robust Error Logging.
+    4. Creative Director Step (Infinite Style Variety).
     """
     if not isinstance(target_users, list):
         target_users = [target_users]
@@ -36,12 +37,9 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
     logger.info(f"Starting Paint Request for {len(target_users)} users in {server_name} ({guild_id})")
 
     try:
-        # 2. BUILD PROMPT
-        prompt_parts = [
-            f"A high-quality artistic depiction of {len(target_users)} people.",
-            "The composition should be natural, dynamic, or environmental.",
-            f"Setting: A scene consistent with the vibe of {server_name}." 
-        ]
+        # 2. GATHER DATA (The "Dry Facts")
+        # We start with a neutral header so we don't bias the Creative Director
+        prompt_parts = [f"Subject Data: {len(target_users)} character(s) in the scene."]
         
         appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
 
@@ -71,7 +69,6 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
 
                     # --- SANITATION FILTER ---
                     # Reject if the fact contains a long ID string (17+ digits) or mention syntax
-                    # This fixes the "strings of userids" issue.
                     if re.search(r'\d{17,}', clean_value) or re.search(r'<@!?&?\d+>', clean_value):
                         continue
                     # -------------------------
@@ -94,28 +91,51 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             if appearance_facts:
                 desc += f"Visuals: {', '.join(appearance_facts)}. "
             else:
-                desc += "Visuals: Undefined (be creative). "
+                desc += "Visuals: Undefined (be creative with this person). "
             
             # Activity / Vibe (From Interests)
             if other_facts:
                 random.shuffle(other_facts)
                 selected_facts = other_facts[:3]
-                desc += f"Action/Vibe based on: {', '.join(selected_facts)}."
+                desc += f"Personality/Vibe hints: {', '.join(selected_facts)}."
                 
             prompt_parts.append(desc)
 
-        # 3. USER DETAILS
+        # 3. USER DETAILS (The "Main Goal")
         if details:
-            prompt_parts.append(f"**Specific Instruction:** {details}")
+            prompt_parts.append(f"**Specific User Request:** {details}")
 
-        # 4. FINALIZE PROMPT
-        final_prompt_text = " ".join(prompt_parts)
+        # --- 4. THE CREATIVE DIRECTOR STEP (New Logic) ---
+        # Consolidate the dry facts
+        dry_facts = "\n".join(prompt_parts)
+
+        # Ask the AI to invent the style and composition
+        director_instruction = (
+            "You are an expert AI Art Director. I have a scene description that needs a style.\n"
+            "**TASK:** Rewrite the 'Source Data' below into a single, high-quality image generation prompt.\n\n"
+            "**RULES:**\n"
+            "1. **STYLE:** INVENT a specific, unique art style for this image. (Examples: Ukiyo-e, 1990s Anime, Renaissance Fresco, Street Art, Blueprint, Tarot Card, Claymation, etc.). Pick something different every time.\n"
+            "2. **COMPOSITION:** You decide the camera angle, lighting, and mood to match that style. Be bold.\n"
+            "3. **OBEDIENCE:** You MUST preserve the physical details of the characters (hair, clothes, etc.) found in the Source Data.\n"
+            "4. **OUTPUT:** Output ONLY the final image prompt text. Do not provide explanations.\n\n"
+            f"**SOURCE DATA:**\n{dry_facts}"
+        )
+
+        # Make the API call to get the styled prompt
+        style_response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME,
+            contents=[director_instruction]
+        )
+
+        # Fallback to dry facts if the Director fails, otherwise use the Creative result
+        final_prompt_text = style_response.text.strip() if style_response and style_response.text else dry_facts
         
         # LOG THE PROMPT (For Debugging)
-        logger.info(f"GENERATING IMAGE PROMPT: {final_prompt_text}")
+        logger.info(f"GENERATED CREATIVE PROMPT: {final_prompt_text}")
 
-        # 5. EXECUTE (Stateless)
-        # previous_prompt=None prevents LLM context leaks
+        # 5. EXECUTE 
+        # We pass the 'Creative' prompt to the image handler. 
+        # Because it's already styled, the handler will respect it.
         await handle_image_request(
             bot_instance, 
             message, 
@@ -126,9 +146,8 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
     except Exception as e:
         # ROBUST ERROR LOGGING
         error_msg = f"PAINT REQUEST FAILED in {server_name}: {e}"
-        logger.error(error_msg, exc_info=True) # exc_info=True prints the full traceback
-        
-       
+        logger.error(error_msg, exc_info=True)
+              
 # --- 2. SELF PORTRAITS (Wrapper) ---
 
 async def handle_paint_me_request(bot_instance, message: discord.Message):
