@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
     Generates an artistic depiction for ONE or MULTIPLE users.
-    UPDATED: Balances 'Interests' into Scenes vs. Standard Portraits.
+    UPDATED: Forces the AI to pick specific 'fun facts' to drive the scene generation.
     """
     if not isinstance(target_users, list):
         target_users = [target_users]
@@ -32,24 +32,29 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
     logger.info(f"Starting Paint Request for {len(target_users)} users in {server_name}")
 
     try:
-        # 2. GATHER DATA (The "Dry Facts")
-        prompt_parts = [f"Subject Data: {len(target_users)} character(s) in the scene."]
+        # 2. GATHER DATA
+        character_definitions = []
         
-        appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses']
+        # Extended keywords to separate physical look from personality quirks
+        appearance_keywords = [
+            'hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 
+            'face', 'skin', 'beard', 'glasses', 'tattoo', 'piercing', 
+            'scar', 'clothes', 'clothing', 'hat', 'mask', 'gender'
+        ]
 
         for i, user in enumerate(target_users, 1):
             appearance_facts = []
             other_facts = []
             gender_fact = None
-            desc = ""
 
             # --- A. SELF-PORTRAIT OVERRIDE (Vinny) ---
             if user.id == bot_instance.user.id:
-                desc = (f"**Subject {i} (Vinny):** "
-                        "Appearance: Robust middle-aged Italian-American man, long dark hair, messy beard, wearing a worn pirate coat or leather jacket. "
-                        "Interests/Themes: Chaos, Pizza, Sailing, Mechanics. "
-                        "Action: He is usually doing something chaotic or mechanical.")
-                prompt_parts.append(desc)
+                char_def = (
+                    f"SUBJECT {i} (Vinny): "
+                    "[[VISUALS: Robust middle-aged Italian-American man, long dark hair, messy beard, worn pirate coat or leather jacket.]] "
+                    "[[TRIVIA: Chaos, Pizza, Sailing, Mechanics, Eating Trash, Dive Bars.]]"
+                )
+                character_definitions.append(char_def)
                 continue
             
             # --- B. USER LOOKUP ---
@@ -59,12 +64,13 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             if user_profile:
                 for key, value in user_profile.items():
                     clean_value = str(value).strip()
-                    clean_key = key.replace('_', ' ')
+                    clean_key = key.replace('_', ' ').lower()
 
-                    # Sanitation Filter
+                    # Sanitation
                     if re.search(r'\d{17,}', clean_value) or re.search(r'<@!?&?\d+>', clean_value):
                         continue
                     
+                    # Sort into Visuals vs Trivia
                     if 'gender' in clean_key:
                         gender_fact = clean_value.title()
                     elif any(keyword in clean_key for keyword in appearance_keywords): 
@@ -72,44 +78,54 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                     else: 
                         other_facts.append(clean_value)
 
-            # --- C. SUBJECT DESCRIPTION ---
-            desc = f"**Subject {i} ({user.display_name}):** "
+            # --- C. SUBJECT CONSTRUCTION ---
+            char_str = f"SUBJECT {i} ({user.display_name}): "
             
+            # 1. Visual Block
+            visuals_block = []
             if gender_fact and "unknown" not in gender_fact.lower():
-                desc += f"Gender: {gender_fact}. "
+                visuals_block.append(f"Gender: {gender_fact}")
             
             if appearance_facts:
-                desc += f"Visuals: {', '.join(appearance_facts)}. "
+                visuals_block.extend(appearance_facts)
             else:
-                desc += "Visuals: Undefined (be creative). "
+                visuals_block.append("Visuals: Undefined (You may invent a look)")
             
-            # KEY CHANGE: Feed 'Interests' specifically as Scene hints
+            char_str += f"[[VISUALS: {', '.join(visuals_block)}]] "
+
+            # 2. Trivia Block (The Fun Details)
             if other_facts:
                 random.shuffle(other_facts)
-                selected_facts = other_facts[:4] 
-                desc += f"Interests/Themes (Use for SCENE & ACTION): {', '.join(selected_facts)}."
+                # INCREASED LIMIT: Take 6 facts to give the AI more "fun details" to choose from
+                selected_facts = other_facts[:6] 
+                char_str += f"[[TRIVIA: {', '.join(selected_facts)}]]"
             else:
-                desc += "Interests/Themes: Unknown (Invent a random scenario)."
-                
-            prompt_parts.append(desc)
+                char_str += "[[TRIVIA: Unknown (Invent a random, chaotic scenario)]]"
+
+            character_definitions.append(char_str)
 
         # 3. USER DETAILS
+        user_request = ""
         if details:
-            prompt_parts.append(f"**Specific User Request:** {details}")
+            user_request = f"USER SPECIFIC REQUEST: {details}"
 
-        # --- 4. THE CREATIVE DIRECTOR STEP (Updated for Variety) ---
-        dry_facts = "\n".join(prompt_parts)
+        # --- 4. THE CREATIVE DIRECTOR STEP ---
+        source_data = "\n".join(character_definitions)
 
         director_instruction = (
-            "You are an expert AI Art Director. The user wants a creative image of their character(s).\n"
-            "**TASK:** Rewrite the 'Source Data' into a detailed image generation prompt.\n\n"
-            "**RULES:**\n"
-            "1. **SCENE & ACTION:** Use the 'Interests/Themes' to create a specific scenario. If they like 'pizza', put them in a kitchen. If 'gaming', a cyber-cafe. \n"
-            "2. **COMPOSITION:** **Mix it up.** Do not default to a 'passport photo'. Use wide shots, candid moments, action shots, or environmental interaction. (Standard portraits are allowed if the style fits, but should not be the default).\n"
-            "3. **STYLE:** INVENT a unique art style (e.g. 90s Anime, Oil Painting, Claymation, Polaroid, Blueprint). Change it up every time.\n"
-            "4. **OBEDIENCE:** You MUST preserve the 'Visuals' (hair, clothes) from the Source Data.\n"
-            "5. **OUTPUT:** Output ONLY the final image prompt text.\n\n"
-            f"**SOURCE DATA:**\n{dry_facts}"
+            "You are an expert AI Art Director. You are famous for incorporating small, specific details about people into your art.\n\n"
+            "**INPUT DATA:**\n"
+            f"{source_data}\n"
+            f"{user_request}\n\n"
+            "**YOUR TASK:** Write a detailed image generation prompt following these priorities:\n"
+            "1. **VISUAL ACCURACY:** You MUST describe the characters exactly as defined in the [[VISUALS]] tags. Do not change their hair/clothes.\n"
+            "2. **SCENE DETAILS (CRITICAL):** Look at the [[TRIVIA]] tags. Pick **ONE specific detail** from that list and build the entire scene around it.\n"
+            "   - Example: If Trivia says 'collects stamps', show them holding a magnifying glass examining a rare stamp.\n"
+            "   - Example: If Trivia says 'hates birds', show them running away from a pigeon.\n"
+            "   - **DO NOT** just make them stand there. They must be engaging with their Trivia.\n"
+            "3. **COMPOSITION:** Use dynamic angles (Wide shot, Action angle, Candid, Fish-eye). No boring passport photos.\n"
+            "4. **ART STYLE:** Choose a unique art style (e.g. 90s Anime, Renaissance, Street Art, Cyberpunk, Claymation).\n\n"
+            "**OUTPUT:** Provide ONLY the final image prompt text."
         )
 
         style_response = await bot_instance.make_tracked_api_call(
@@ -117,9 +133,9 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             contents=[director_instruction]
         )
 
-        final_prompt_text = style_response.text.strip() if style_response and style_response.text else dry_facts
+        final_prompt_text = style_response.text.strip() if style_response and style_response.text else source_data
         
-        logger.info(f"GENERATED DYNAMIC PROMPT: {final_prompt_text}")
+        logger.info(f"GENERATED DETAILED PROMPT: {final_prompt_text}")
 
         # 5. EXECUTE 
         await handle_image_request(
