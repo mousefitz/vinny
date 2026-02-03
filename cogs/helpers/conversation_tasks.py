@@ -5,7 +5,6 @@ import json
 import discord
 from google.genai import types
 from . import ai_classifiers, utilities
-# ADDED IMPORT
 from utils import constants
 
 async def handle_direct_reply(bot_instance, message: discord.Message):
@@ -59,7 +58,10 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         f"You previously said: \"{replied_to_message.content}\"\n"
         f"The user '{user_name_to_use}' has now directly replied to you with: \"{message.content}\"\n\n"
         f"# --- YOUR TASK ---\n"
-        f"Based on this direct reply, generate a short, in-character response. Your mood is '{bot_instance.current_mood}'."
+        f"Based on this direct reply, generate a short, in-character response. Your mood is '{bot_instance.current_mood}'.\n"
+        f"CRITICAL RULES:\n"
+        f"1. **DO NOT REPEAT** the user's message back to them. They know what they said.\n"
+        f"2. Respond directly to the **intent**, not the text. Move the conversation forward immediately."
     )
 
     try:
@@ -69,14 +71,12 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
             config=bot_instance.GEMINI_TEXT_CONFIG
         )
         
-        # --- FIXED: Handle Empty Responses ---
         if response and response.text:
             cleaned_response = response.text.strip()
             if cleaned_response and cleaned_response.lower() != '[silence]':
                 for chunk in bot_instance.split_message(cleaned_response):
                     await message.channel.send(chunk.lower())
         else:
-            # Fallback if AI replies with nothing
             logging.warning(f"⚠️ Direct reply resulted in empty text. Candidate: {response.candidates[0] if response and response.candidates else 'None'}")
             await message.channel.send("huh? sorry i spaced out for a second.")
             
@@ -94,7 +94,7 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
         facts = user_profile.get("facts", {})
         facts_str = "\n".join([f"- {k}: {v}" for k, v in facts.items()]) if facts else "No specific facts remembered yet."
 
-        # 🧠 TONE SELECTOR (Fixed Emoji)
+        # 🧠 TONE SELECTOR
         tone_instruction = "## RELATIONSHIP: NEUTRAL\n- You don't know this user well. Be guarded and indifferent."
         if rel_score >= 60:   # Bestie / Worshipped
             tone_instruction = "## RELATIONSHIP: BEST FRIEND (High Trust)\n- You LOVE this user. Be warm, enthusiastic, and loyal.\n- Use nicknames like 'pal', 'buddy', 'boss'."
@@ -111,19 +111,15 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
         actual_display_name = custom_nickname if custom_nickname else message.author.display_name
 
         # --- SENTIMENT & TOPIC SCORING ---
-        
         if len(message.content) > 3:
             impact_score = await ai_classifiers.analyze_sentiment_impact(
                 bot_instance, message.author.display_name, message.content
             )
             if impact_score != 0:
-                
                 new_score = await bot_instance.firestore_service.update_relationship_score(
                     user_id, guild_id, impact_score
                 )
-                
                 await update_relationship_status(bot_instance, user_id, guild_id, new_score)
-                
                 if impact_score > 0: logging.info(f"📈 {message.author.display_name} gained {impact_score} pts. Total: {new_score:.2f}")
                 else: logging.info(f"📉 {message.author.display_name} lost {impact_score} pts. Total: {new_score:.2f}")
 
@@ -144,13 +140,17 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                     relevant_memories_text = "\n".join(memory_strings)
 
         # --- HISTORY CONSTRUCTION ---
+        # 1. System Instruction
         history = [types.Content(role='user', parts=[types.Part(text=bot_instance.personality_instruction)])]
 
+        # 2. Memories
         if relevant_memories_text:
             history.append(types.Content(role='user', parts=[types.Part(text=f"## RECALLED MEMORIES FROM PAST CONVERSATIONS:\n(Use these only if relevant to the current topic)\n{relevant_memories_text}")]))
 
+        # 3. Model Acknowledgment
         history.append(types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")]))
 
+        # 4. Recent Chat History (The Context)
         async for msg in message.channel.history(limit=bot_instance.MAX_CHAT_HISTORY_LENGTH, before=message):
             user_line = f"{msg.author.display_name} (ID: {msg.author.id}): {msg.content}"
             bot_line = f"{msg.author.display_name}: {msg.content}"
@@ -196,19 +196,22 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                 final_instruction_text = (
                     f"{tone_instruction}\n\n"
                     f"## KNOWN USER FACTS:\n{facts_str}\n\n"
-                    f"The user '{actual_display_name}' just said your name to get your attention. "
-                    f"Chime in with an opinion on the recent chat topic, OR just acknowledge {actual_display_name}. "
+                    f"The user '{actual_display_name}' just said your name to get your attention.\n"
+                    f"1. **LOOK UP:** Look at the recent chat history above.\n"
+                    f"2. **CONNECT:** If there was a conversation happening, continue it. If silence, just acknowledge them.\n"
                     f"3. **DO NOT SUMMARIZE.**"
                 )
             else:
+                # --- UPDATED CONTEXT LOGIC ---
                 final_instruction_text = (
                     f"{tone_instruction}\n\n"
                     f"## KNOWN USER FACTS:\n{facts_str}\n\n"
-                    f"The user '{actual_display_name}' is talking directly to you. "
-                    f"Current Message: \"{cleaned_content}\".\n\n"
-                    f"## TASK:\n"
-                    f"1. Respond naturally to their message.\n"
-                    f"2. **CONTEXT MATTERS:** Look at the chat history above. If we were already discussing a topic (e.g., a fight, a joke, a story), CONTINUE that flow. Do not reset the conversation."
+                    f"The user '{actual_display_name}' has sent a new message in this channel.\n\n"
+                    f"## CRITICAL INSTRUCTION: DETECT CONVERSATION FLOW\n"
+                    f"1. **LOOK UP:** Read the chat history immediately above this new message.\n"
+                    f"2. **CONNECT:** Is this message a response to something you or someone else just said? If yes, CONTINUE that specific topic.\n"
+                    f"3. **INTERPRET:** If the message is short (e.g., 'no way', 'really?', 'why?'), it refers to the PREVIOUS message in history. Do not treat it as a standalone statement.\n"
+                    f"4. **RESPOND:** Reply naturally to the user. Do not repeat their message."
                 )
 
         if is_autonomous:
@@ -276,7 +279,6 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
             try: await asyncio.to_thread(bot_instance.gemini_client.files.delete, name=uploaded_media_file.name)
             except: pass 
 
-        # --- SAFETY NET: Handle Empty Responses ---
         if response and response.text:
             cleaned_response = response.text.strip()
             
@@ -293,13 +295,11 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
             elif cleaned_response.lower() == '[silence]':
                 logging.info(f"Vinny decided to stay silent for message {message.id}")
         else:
-            # LOG WHY IT FAILED
             if response and response.candidates:
                 logging.warning(f"⚠️ Empty Response! Finish Reason: {response.candidates[0].finish_reason}")
             else:
                 logging.warning("⚠️ API returned None or no candidates.")
 
-            # ONLY FORCE REPLY IF DIRECTLY SPOKEN TO (Not autonomous mode)
             if not is_autonomous:
                 await message.channel.send("my brain just rebooted. what was that?")
 
