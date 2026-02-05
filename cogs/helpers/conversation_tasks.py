@@ -563,76 +563,74 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
 
 async def summarize_url(client, http_session, url):
     """
-    Fetches a URL, uses Readability to find the main content, 
-    and asks Gemini to summarize it with robust logging.
+    Highly robust summarizer with forensic logging to catch silent failures.
     """
-    logging.info(f"--- 🌐 Summarization Request: {url} ---")
+    logging.info(f"--- 🌐 STARTING FORENSIC SUMMARIZATION: {url} ---")
     
     try:
-        # 1. FETCHING STAGE
+        # 1. FETCHING (The most likely place for a hang)
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://www.google.com/" # Helps sneak past news firewalls
         }
         
         try:
-            async with http_session.get(url, headers=headers, timeout=15) as response:
+            logging.info(f"Attempting HTTP GET to {url}...")
+            async with http_session.get(url, headers=headers, timeout=10) as response:
+                logging.info(f"Response received! Status: {response.status}")
                 if response.status != 200:
-                    logging.warning(f"❌ Fetch Failed: HTTP {response.status} for {url}")
-                    return f"i couldn't reach that website, pal. (status code: {response.status})"
-                
+                    return f"i couldn't reach that website. (Status: {response.status})"
                 html = await response.text()
-                logging.info(f"✅ Fetch Success: Received {len(html)} bytes of HTML.")
-                
+                logging.info(f"Successfully downloaded {len(html)} characters of HTML.")
         except asyncio.TimeoutError:
-            logging.error(f"🕒 Fetch Timeout: {url} took too long to respond.")
-            return "that site took too long to answer. i got bored and left."
-        except Exception as fetch_err:
-            logging.error(f"🚨 Network Error: Failed to connect to {url}. Error: {fetch_err}")
-            return "the internet tubes are clogged. couldn't get to that link."
+            logging.error(f"Request timed out for {url}")
+            return "that site is takin' forever. i'm out."
+        except Exception as e:
+            logging.error(f"HTTP GET failed for {url}", exc_info=True)
+            return "couldn't connect to the site. technical difficulties."
 
-        # 2. READABILITY / PARSING STAGE
+        # 2. PARSING (Where silent crashes happen if HTML is weird)
         try:
+            logging.info("Initializing Readability Document...")
             doc = Document(html)
-            summary_html = doc.summary()
             title = doc.title()
-            logging.info(f"📖 Readability: Extracted title '{title}' and summary HTML.")
-        except Exception as read_err:
-            logging.error(f"🧱 Parsing Error: Readability failed for {url}. Error: {read_err}")
-            return "i tried to read it, but the page layout is a mess. couldn't find the story."
+            summary_html = doc.summary()
+            logging.info(f"Readability parsed article: '{title}'")
+        except Exception as e:
+            logging.error(f"Readability-lxml CRASHED on {url}", exc_info=True)
+            return "i tried to read it, but the page code is a dumpster fire."
 
-        # 3. CLEANING STAGE
-        soup = BeautifulSoup(summary_html, 'html.parser')
-        clean_text = ' '.join(soup.get_text(separator=' ').split())
-        text_length = len(clean_text)
-        
-        logging.info(f"🧹 Cleaning: Extracted {text_length} characters of clean text.")
+        # 3. CLEANING
+        try:
+            soup = BeautifulSoup(summary_html, 'html.parser')
+            clean_text = ' '.join(soup.get_text(separator=' ').split())
+            logging.info(f"Cleaned text length: {len(clean_text)}")
+        except Exception as e:
+            logging.error("BeautifulSoup cleaning failed", exc_info=True)
+            return "failed to clean up the page text."
 
-        if text_length < 250:
-             logging.warning(f"⚠️ Content Warning: Only {text_length} characters found. Likely a failed extraction or paywall.")
-             return "i tried to read it, but there wasn't enough meat on the bones. might be a video or a login wall."
+        if len(clean_text) < 250:
+            logging.warning(f"Insufficient text found ({len(clean_text)} chars).")
+            return "that page is empty or i'm blocked by a paywall/bot-check."
 
-        if text_length > 30000:
-            logging.info(f"✂️ Truncating: Text is {text_length} chars. Trimming to 30,000 for API safety.")
-            clean_text = clean_text[:30000] + "...(truncated)"
-
-        # 4. GENERATION STAGE
+        # 4. AI GENERATION
         prompt = (
-            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'. "
-            f"Capture the main points and tone. Write it in your unique, slightly cynical but helpful voice.\n\n"
-            f"CONTENT:\n{clean_text}"
+            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'.\n\n"
+            f"CONTENT:\n{clean_text[:25000]}"
         )
         
-        logging.info(f"🧠 AI Call: Sending {len(prompt)} prompt tokens to Gemini...")
+        logging.info("Calling Gemini for summary...")
         summary = await api_clients.generate_text_with_genai(client, prompt)
         
         if summary:
-            logging.info(f"✨ Success: Summary generated for '{title}'.")
+            logging.info("Summary generated successfully.")
             return f"**{title}**\n\n{summary}"
-        else:
-            logging.error(f"Empty Response: Gemini returned nothing for {url}.")
-            return "i read the page, but my brain's a bit foggy. couldn't summarize it."
+        
+        logging.error("Gemini returned an empty string.")
+        return "read it, but i got nothin'. my brain's empty."
 
     except Exception as e:
-        # This catches anything we missed with 'exc_info=True' to print the full stack trace in your logs
-        logging.critical(f"💀 CRITICAL ERROR in summarize_url: {e}", exc_info=True)
-        return "somethin' went wrong while trying to read that link. i might have spilled coffee on the server."
+        # This is the "Safety Net" - it will log the EXACT line that caused the bot to stop
+        logging.critical(f"UNHANDLED EXCEPTION in summarize_url", exc_info=True)
+        return "everything went black. check the logs."
