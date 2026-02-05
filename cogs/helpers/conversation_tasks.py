@@ -8,6 +8,7 @@ from . import ai_classifiers, utilities
 from utils import constants
 from bs4 import BeautifulSoup
 from utils import api_clients
+from readability import Document
 
 async def handle_direct_reply(bot_instance, message: discord.Message):
     """Handles a direct reply (via reply or mention) to one of the bot's messages."""
@@ -562,54 +563,55 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
 
 async def summarize_url(client, http_session, url):
     """
-    Fetches a URL, extracts the text, and asks Gemini to summarize it.
+    Fetches a URL, uses Readability to find the main content, 
+    and asks Gemini to summarize it.
     """
     try:
-        # 1. Fetch the webpage
+        
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
-        async with http_session.get(url, headers=headers, timeout=10) as response:
+        
+        async with http_session.get(url, headers=headers, timeout=15) as response:
             if response.status != 200:
-                return f"I couldn't reach that website! (Status code: {response.status})"
+                return f"i couldn't reach that website, pal. (status code: {response.status})"
             html = await response.text()
 
-        # 2. Extract text using BeautifulSoup
-        soup = BeautifulSoup(html, 'html.parser')
         
-        # Remove script and style elements
-        for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
-            script.extract()
-            
-        # Get text
-        text = soup.get_text(separator=' ')
-        
-        # Clean up whitespace
-        lines = (line.strip() for line in text.splitlines())
-        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-        clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+        doc = Document(html)
+        summary_html = doc.summary() 
+        title = doc.title()
 
-        # Truncate if too long (Gemini has a large context, but let's be safe/efficient)
+        
+        soup = BeautifulSoup(summary_html, 'html.parser')
+        clean_text = soup.get_text(separator=' ')
+        
+        
+        clean_text = ' '.join(clean_text.split())
+
+        
+        if len(clean_text) < 200:
+             return "i tried to read it, but there wasn't enough meat on the bones. might be a video or a login wall."
+
+        
         if len(clean_text) > 30000:
             clean_text = clean_text[:30000] + "...(truncated)"
 
-        if len(clean_text) < 50:
-             return "That link didn't have enough text for me to read. Maybe it's all images or requires a login."
-
-        # 3. Generate Summary
+        
         prompt = (
-            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following webpage text. "
-            f"Capture the main points and tone. Write it in a casual, slightly cynical but helpful voice.\n\nCONTENT:\n{clean_text}"
+            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'. "
+            f"Capture the main points and tone. Write it in your unique, slightly cynical but helpful voice.\n\n"
+            f"CONTENT:\n{clean_text}"
         )
         
         summary = await api_clients.generate_text_with_genai(client, prompt)
         
         if summary:
-            return summary
+            return f"**{title}**\n\n{summary}"
         else:
-            return "I read the page, but I couldn't come up with a summary. My brain is buffering."
+            return "i read the page, but my brain's a bit foggy. couldn't summarize it."
 
     except Exception as e:
         logging.error(f"Error summarizing URL: {e}")
-        return "Something went wrong while trying to read that link. I might have spilled coffee on the server."
+        return "somethin' went wrong while trying to read that link. i might have spilled coffee on the server."
     

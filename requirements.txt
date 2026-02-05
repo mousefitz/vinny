@@ -7,3 +7,5 @@ beautifulsoup4
 Pillow
 firebase-admin
 cachetools
+readability-lxml
+lxml
