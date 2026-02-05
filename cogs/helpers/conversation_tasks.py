@@ -564,54 +564,75 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
 async def summarize_url(client, http_session, url):
     """
     Fetches a URL, uses Readability to find the main content, 
-    and asks Gemini to summarize it.
+    and asks Gemini to summarize it with robust logging.
     """
+    logging.info(f"--- 🌐 Summarization Request: {url} ---")
+    
     try:
-        
+        # 1. FETCHING STAGE
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
         
-        async with http_session.get(url, headers=headers, timeout=15) as response:
-            if response.status != 200:
-                return f"i couldn't reach that website, pal. (status code: {response.status})"
-            html = await response.text()
+        try:
+            async with http_session.get(url, headers=headers, timeout=15) as response:
+                if response.status != 200:
+                    logging.warning(f"❌ Fetch Failed: HTTP {response.status} for {url}")
+                    return f"i couldn't reach that website, pal. (status code: {response.status})"
+                
+                html = await response.text()
+                logging.info(f"✅ Fetch Success: Received {len(html)} bytes of HTML.")
+                
+        except asyncio.TimeoutError:
+            logging.error(f"🕒 Fetch Timeout: {url} took too long to respond.")
+            return "that site took too long to answer. i got bored and left."
+        except Exception as fetch_err:
+            logging.error(f"🚨 Network Error: Failed to connect to {url}. Error: {fetch_err}")
+            return "the internet tubes are clogged. couldn't get to that link."
 
-        
-        doc = Document(html)
-        summary_html = doc.summary() 
-        title = doc.title()
+        # 2. READABILITY / PARSING STAGE
+        try:
+            doc = Document(html)
+            summary_html = doc.summary()
+            title = doc.title()
+            logging.info(f"📖 Readability: Extracted title '{title}' and summary HTML.")
+        except Exception as read_err:
+            logging.error(f"🧱 Parsing Error: Readability failed for {url}. Error: {read_err}")
+            return "i tried to read it, but the page layout is a mess. couldn't find the story."
 
-        
+        # 3. CLEANING STAGE
         soup = BeautifulSoup(summary_html, 'html.parser')
-        clean_text = soup.get_text(separator=' ')
+        clean_text = ' '.join(soup.get_text(separator=' ').split())
+        text_length = len(clean_text)
         
-        
-        clean_text = ' '.join(clean_text.split())
+        logging.info(f"🧹 Cleaning: Extracted {text_length} characters of clean text.")
 
-        
-        if len(clean_text) < 200:
+        if text_length < 250:
+             logging.warning(f"⚠️ Content Warning: Only {text_length} characters found. Likely a failed extraction or paywall.")
              return "i tried to read it, but there wasn't enough meat on the bones. might be a video or a login wall."
 
-        
-        if len(clean_text) > 30000:
+        if text_length > 30000:
+            logging.info(f"✂️ Truncating: Text is {text_length} chars. Trimming to 30,000 for API safety.")
             clean_text = clean_text[:30000] + "...(truncated)"
 
-        
+        # 4. GENERATION STAGE
         prompt = (
             f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'. "
             f"Capture the main points and tone. Write it in your unique, slightly cynical but helpful voice.\n\n"
             f"CONTENT:\n{clean_text}"
         )
         
+        logging.info(f"🧠 AI Call: Sending {len(prompt)} prompt tokens to Gemini...")
         summary = await api_clients.generate_text_with_genai(client, prompt)
         
         if summary:
+            logging.info(f"✨ Success: Summary generated for '{title}'.")
             return f"**{title}**\n\n{summary}"
         else:
+            logging.error(f"Empty Response: Gemini returned nothing for {url}.")
             return "i read the page, but my brain's a bit foggy. couldn't summarize it."
 
     except Exception as e:
-        logging.error(f"Error summarizing URL: {e}")
+        # This catches anything we missed with 'exc_info=True' to print the full stack trace in your logs
+        logging.critical(f"💀 CRITICAL ERROR in summarize_url: {e}", exc_info=True)
         return "somethin' went wrong while trying to read that link. i might have spilled coffee on the server."
-    
