@@ -3,20 +3,48 @@ import json
 import logging
 import discord
 import random
-import os
+import io
 import datetime
+from PIL import Image  # <--- NEW IMPORT
 from google.genai import types
 from utils import api_clients
-
-from discord.ext import commands
 
 # Setup Logger
 logger = logging.getLogger(__name__)
 
+# --- NEW HELPER: SANITIZE IMAGES ---
+def prepare_image_for_api(image_bytes):
+    """
+    Uses Pillow to convert any image (WebP, PNG, etc.) to a standard
+    resized JPEG to ensure the Vision API accepts it.
+    """
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            # 1. Convert to RGB (Strip transparency/Alpha channel)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            
+            # 2. Resize if massive (Cap at 1024x1024 to save bandwidth/tokens)
+            max_size = 1024
+            if img.width > max_size or img.height > max_size:
+                img.thumbnail((max_size, max_size))
+            
+            # 3. Save to Bytes as JPEG
+            output_buffer = io.BytesIO()
+            img.save(output_buffer, format='JPEG', quality=85)
+            output_buffer.seek(0)
+            return output_buffer.read(), 'image/jpeg'
+            
+    except Exception as e:
+        logger.warning(f"Pillow failed to process image: {e}. Using raw bytes.")
+        # Fallback to original bytes if Pillow fails
+        return image_bytes, 'image/png'
+
+# --- 1. PORTRAIT REQUESTS ---
+
 async def handle_portrait_request(bot_instance, message, target_users, details=""):
     """
     Generates an artistic depiction for ONE or MULTIPLE users.
-    UPDATED: Forces the AI to pick specific 'fun facts' to drive the scene generation.
     """
     if not isinstance(target_users, list):
         target_users = [target_users]
@@ -35,7 +63,6 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         # 2. GATHER DATA
         character_definitions = []
         
-        # Extended keywords to separate physical look from personality quirks
         appearance_keywords = [
             'hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 
             'face', 'skin', 'beard', 'glasses', 'tattoo', 'piercing', 
@@ -47,7 +74,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             other_facts = []
             gender_fact = None
 
-            # --- A. SELF-PORTRAIT OVERRIDE (Vinny) ---
+            # A. SELF-PORTRAIT OVERRIDE
             if user.id == bot_instance.user.id:
                 char_def = (
                     f"SUBJECT {i} (Vinny): "
@@ -57,7 +84,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 character_definitions.append(char_def)
                 continue
             
-            # --- B. USER LOOKUP ---
+            # B. USER LOOKUP
             user_id = str(user.id)
             user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
             
@@ -66,11 +93,9 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                     clean_value = str(value).strip()
                     clean_key = key.replace('_', ' ').lower()
 
-                    # Sanitation
                     if re.search(r'\d{17,}', clean_value) or re.search(r'<@!?&?\d+>', clean_value):
                         continue
                     
-                    # Sort into Visuals vs Trivia
                     if 'gender' in clean_key:
                         gender_fact = clean_value.title()
                     elif any(keyword in clean_key for keyword in appearance_keywords): 
@@ -78,10 +103,8 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                     else: 
                         other_facts.append(clean_value)
 
-            # --- C. SUBJECT CONSTRUCTION ---
+            # C. SUBJECT CONSTRUCTION
             char_str = f"SUBJECT {i} ({user.display_name}): "
-            
-            # 1. Visual Block
             visuals_block = []
             if gender_fact and "unknown" not in gender_fact.lower():
                 visuals_block.append(f"Gender: {gender_fact}")
@@ -93,10 +116,8 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             
             char_str += f"[[VISUALS: {', '.join(visuals_block)}]] "
 
-            # 2. Trivia Block (The Fun Details)
             if other_facts:
                 random.shuffle(other_facts)
-                # INCREASED LIMIT: Take 6 facts to give the AI more "fun details" to choose from
                 selected_facts = other_facts[:6] 
                 char_str += f"[[TRIVIA: {', '.join(selected_facts)}]]"
             else:
@@ -109,7 +130,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         if details:
             user_request = f"USER SPECIFIC REQUEST: {details}"
 
-        # --- 4. THE CREATIVE DIRECTOR STEP ---
+        # 4. CREATIVE DIRECTOR STEP
         source_data = "\n".join(character_definitions)
 
         director_instruction = (
@@ -149,7 +170,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         error_msg = f"PAINT REQUEST FAILED in {server_name}: {e}"
         logger.error(error_msg, exc_info=True)
               
-# --- 3. GENERIC IMAGE REQUESTS (Rewriter & Generator) ---
+# --- 2. GENERIC IMAGE REQUESTS (Rewriter & Generator) ---
 
 async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
     """
@@ -208,10 +229,9 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 return None
 
             data = json.loads(response.text)
-            # EXTRACT THE DATA
             enhanced_prompt = data.get("enhanced_prompt", image_prompt)
             core_subject = data.get("core_subject", "Artistic Chaos")
-            reply_text = data.get("reply_text", "Here is that image you wanted.") # This is the new sync part
+            reply_text = data.get("reply_text", "Here is that image you wanted.") 
 
             # 3. Announce
             thinking_messages = [
@@ -228,13 +248,11 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 "wiping the canvas... startin' fresh.",
                 "i got a wild idea for this one.",
                 "loading the canvas...",
-                "patience, art takes time."
             ]
             
             await message.channel.send(random.choice(thinking_messages))
 
             # 4. Generate the Image
-            # Using your specific api_clients function
             image_obj, count = await api_clients.generate_image_with_genai(
                 bot_instance.gemini_client,
                 enhanced_prompt,
@@ -256,7 +274,6 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 clean_prompt = enhanced_prompt[:1000].replace("\n", " ")
                 embed.set_footer(text=f"{clean_prompt} | Requested by {message.author.display_name}")
                 
-                # SEND THE REPLY TEXT AND THE IMAGE TOGETHER
                 await message.channel.send(content=reply_text.lower(), file=file, embed=embed)
                 return enhanced_prompt
             
@@ -270,20 +287,20 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             return None
 
 
-# --- 4. IMAGE REPLIES (Comments) ---
+# --- 3. IMAGE REPLIES (Comments) ---
 
 async def handle_image_reply(bot_instance, reply_message: discord.Message, original_message: discord.Message):
     """Responds to a user's comment on an existing image."""
     try:
         image_url = None
-        mime_type = 'image/png'
+        # Default, but will be overwritten by Pillow helper
+        mime_type = 'image/png' 
 
         if original_message.embeds and original_message.embeds[0].image:
             image_url = original_message.embeds[0].image.url
         elif original_message.attachments and "image" in original_message.attachments[0].content_type:
             image_attachment = original_message.attachments[0]
             image_url = image_attachment.url
-            mime_type = image_attachment.content_type
 
         if not image_url:
             await reply_message.channel.send("i see the reply but somethin's wrong with the original picture, pal.")
@@ -293,7 +310,11 @@ async def handle_image_reply(bot_instance, reply_message: discord.Message, origi
             if resp.status != 200:
                 await reply_message.channel.send("couldn't grab the picture, the link's all busted.")
                 return
-            image_bytes = await resp.read()
+            raw_bytes = await resp.read()
+
+        # --- USE PILLOW TO CLEANUP IMAGE ---
+        clean_bytes, clean_mime = prepare_image_for_api(raw_bytes)
+        # -----------------------------------
 
         user_comment = re.sub(f'<@!?{bot_instance.user.id}>', '', reply_message.content).strip()
         prompt_text = (
@@ -304,7 +325,7 @@ async def handle_image_reply(bot_instance, reply_message: discord.Message, origi
         
         prompt_parts = [
             types.Part(text=prompt_text),
-            types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_bytes))
+            types.Part(inline_data=types.Blob(mime_type=clean_mime, data=clean_bytes))
         ]
 
         async with reply_message.channel.typing():
@@ -316,6 +337,14 @@ async def handle_image_reply(bot_instance, reply_message: discord.Message, origi
             if response and response.text:
                 for chunk in bot_instance.split_message(response.text): 
                     await reply_message.channel.send(chunk.lower())
+            else:
+                # Log refusal details
+                finish_reason = "Unknown"
+                if response and response.candidates:
+                    finish_reason = response.candidates[0].finish_reason
+                
+                logging.warning(f"Image Reply Blocked/Empty. Finish Reason: {finish_reason}")
+                await reply_message.channel.send("i see it, but the safety filters are gagging me. can't talk about it.")
 
     except Exception:
         logging.error("Failed to handle an image reply.", exc_info=True)

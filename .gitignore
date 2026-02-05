@@ -10,3 +10,4 @@ environment.yml
 env/
 venv/
 .conda/
+etc/

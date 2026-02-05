@@ -6,6 +6,8 @@ import discord
 from google.genai import types
 from . import ai_classifiers, utilities
 from utils import constants
+from bs4 import BeautifulSoup
+from utils import api_clients
 
 async def handle_direct_reply(bot_instance, message: discord.Message):
     """Handles a direct reply (via reply or mention) to one of the bot's messages."""
@@ -557,3 +559,57 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
     words = re.findall(r'\w+', text.lower())
     keywords = [w for w in words if w not in ignore_words and len(w) > 3]
     return keywords[:3]
+
+async def summarize_url(client, http_session, url):
+    """
+    Fetches a URL, extracts the text, and asks Gemini to summarize it.
+    """
+    try:
+        # 1. Fetch the webpage
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
+        async with http_session.get(url, headers=headers, timeout=10) as response:
+            if response.status != 200:
+                return f"I couldn't reach that website! (Status code: {response.status})"
+            html = await response.text()
+
+        # 2. Extract text using BeautifulSoup
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            script.extract()
+            
+        # Get text
+        text = soup.get_text(separator=' ')
+        
+        # Clean up whitespace
+        lines = (line.strip() for line in text.splitlines())
+        chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+        clean_text = '\n'.join(chunk for chunk in chunks if chunk)
+
+        # Truncate if too long (Gemini has a large context, but let's be safe/efficient)
+        if len(clean_text) > 30000:
+            clean_text = clean_text[:30000] + "...(truncated)"
+
+        if len(clean_text) < 50:
+             return "That link didn't have enough text for me to read. Maybe it's all images or requires a login."
+
+        # 3. Generate Summary
+        prompt = (
+            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following webpage text. "
+            f"Capture the main points and tone. Write it in a casual, slightly cynical but helpful voice.\n\nCONTENT:\n{clean_text}"
+        )
+        
+        summary = await api_clients.generate_text_with_genai(client, prompt)
+        
+        if summary:
+            return summary
+        else:
+            return "I read the page, but I couldn't come up with a summary. My brain is buffering."
+
+    except Exception as e:
+        logging.error(f"Error summarizing URL: {e}")
+        return "Something went wrong while trying to read that link. I might have spilled coffee on the server."
+    

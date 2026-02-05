@@ -19,6 +19,9 @@ from utils.fact_extractor import extract_facts_from_message
 # Helper Imports
 from cogs.helpers import ai_classifiers, utilities, image_tasks, conversation_tasks
 
+# Compile a regex for finding URLs
+URL_PATTERN = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+
 if TYPE_CHECKING:
     from main import VinnyBot
 
@@ -87,11 +90,62 @@ class VinnyLogic(commands.Cog):
             
             # 3. Clean Content
             cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
+            msg_content_lower = message.content.lower()
 
             # 4. Check for Corrections ("Wrong", "That's not it")
             if await ai_classifiers.is_a_correction(self.bot, message, self.bot.GEMINI_TEXT_CONFIG):
                 return await conversation_tasks.handle_correction(self.bot, message)
             
+            # =========================================================================
+            # NEW: URL SUMMARIZATION
+            # =========================================================================
+            summary_triggers = [
+                "summarize", "summary", "tldr", "tl;dr", "give me the gist", 
+                "what's this about", "break it down"
+            ]
+            
+            is_summary_request = any(trigger in msg_content_lower for trigger in summary_triggers)
+            is_addressed = "vinny" in msg_content_lower or self.bot.user in message.mentions or (message.reference and message.reference.resolved and message.reference.resolved.author == self.bot.user)
+
+            if is_summary_request and is_addressed:
+                target_url = None
+
+                # A. Check message itself
+                urls = URL_PATTERN.findall(message.content)
+                if urls:
+                    target_url = urls[0]
+                
+                # B. Check Reply
+                elif message.reference and message.reference.resolved:
+                    replied_msg = message.reference.resolved
+                    replied_urls = URL_PATTERN.findall(replied_msg.content)
+                    if replied_urls:
+                        target_url = replied_urls[0]
+                    # Check embeds in reply
+                    elif replied_msg.embeds:
+                        for embed in replied_msg.embeds:
+                            if embed.url:
+                                target_url = embed.url
+                                break
+                
+                # C. Check History (Last 5 msgs)
+                if not target_url:
+                    async for past_msg in message.channel.history(limit=5):
+                        past_urls = URL_PATTERN.findall(past_msg.content)
+                        if past_urls:
+                            target_url = past_urls[0]
+                            break
+
+                if target_url:
+                    async with message.channel.typing():
+                        summary = await conversation_tasks.summarize_url(
+                            self.bot.genai_client, 
+                            self.bot.http_session, 
+                            target_url
+                        )
+                        await message.reply(summary)
+                    return # Stop processing
+
             # =========================================================================
             # 1. HANDLING REPLIES (Priority Logic)
             # =========================================================================

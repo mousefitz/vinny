@@ -43,11 +43,9 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
 
 # --- Google Cloud Imagen API ---
 
-# --- Google Cloud Imagen API ---
-
 async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-generate-001"):
     """
-    Generates an image using the google-genai SDK (API Key).
+    Generates an image using the google-genai SDK.
     Returns: (image_bytes_io, count)
     """
     try:
@@ -67,13 +65,33 @@ async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-gener
             image_bytes = response.generated_images[0].image.image_bytes
             return io.BytesIO(image_bytes), 1
         else:
-            # --- FIX: Log the reason why no images were returned ---
-            logging.warning(f"GenAI returned 0 images. Full Response: {response}")
+            # --- DEBUGGING REFUSALS ---
+            logging.warning("GenAI returned 0 images. Likely a Safety/Copyright refusal.")
+            try:
+                logging.warning(f"Full Response Details: {response.model_dump_json(indent=2)}")
+            except AttributeError:
+                logging.warning(f"Could not dump JSON. Raw Response: {response}")
             
     except Exception as e:
         logging.error(f"GenAI Image Generation failed: {e}")
         
     return None, 0
+
+async def generate_text_with_genai(client, prompt, model="gemini-2.0-flash"):
+    """
+    Generates text using the google-genai SDK.
+    Useful for summarization and utility tasks.
+    """
+    try:
+        response = await client.aio.models.generate_content(
+            model=model,
+            contents=prompt
+        )
+        if response.text:
+            return response.text
+    except Exception as e:
+        logging.error(f"GenAI Text Generation failed: {e}")
+    return None
 
 # --- OpenWeatherMap API ---
 
@@ -83,11 +101,9 @@ async def geocode_location(http_session: aiohttp.ClientSession, api_key: str, lo
     is_zip = location.isdigit() and len(location) == 5
     
     if is_zip:
-        # UPDATED: Use HTTPS
         base_url = "https://api.openweathermap.org/geo/1.0/zip"
         params["zip"] = f"{location},US"
     else:
-        # UPDATED: Use HTTPS
         base_url = "https://api.openweathermap.org/geo/1.0/direct"
         params["q"] = location
 
@@ -106,7 +122,6 @@ async def get_weather_data(http_session: aiohttp.ClientSession, api_key: str, la
     if not api_key: return None
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": "imperial"}
     try:
-        # UPDATED: Use HTTPS
         async with http_session.get("https://api.openweathermap.org/data/2.5/weather", params=params) as response:
             if response.status == 200:
                 return await response.json()
@@ -118,7 +133,6 @@ async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, 
     if not api_key: return None
     params = {"lat": lat, "lon": lon, "appid": api_key, "units": "imperial"}
     try:
-        # UPDATED: Use HTTPS
         url = "https://api.openweathermap.org/data/2.5/forecast"
         async with http_session.get(url, params=params) as response:
             if response.status == 200:
