@@ -43,6 +43,8 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
 
 # --- Google Cloud Imagen API ---
 
+# --- Google Cloud Imagen API ---
+
 async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-generate-001"):
     """
     Generates an image using the google-genai SDK (API Key).
@@ -64,6 +66,9 @@ async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-gener
         if response.generated_images:
             image_bytes = response.generated_images[0].image.image_bytes
             return io.BytesIO(image_bytes), 1
+        else:
+            # --- FIX: Log the reason why no images were returned ---
+            logging.warning(f"GenAI returned 0 images. Full Response: {response}")
             
     except Exception as e:
         logging.error(f"GenAI Image Generation failed: {e}")
