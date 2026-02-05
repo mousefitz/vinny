@@ -139,12 +139,12 @@ class VinnyLogic(commands.Cog):
                 if target_url:
                     async with message.channel.typing():
                         summary = await conversation_tasks.summarize_url(
-                            self.bot.genai_client, 
+                            self.bot.gemini_client,
                             self.bot.http_session, 
                             target_url
                         )
                         await message.reply(summary)
-                    return # Stop processing
+                    return 
 
             # =========================================================================
             # 1. HANDLING REPLIES (Priority Logic)
