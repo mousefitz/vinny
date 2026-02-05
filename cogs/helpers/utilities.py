@@ -5,7 +5,30 @@ import discord
 import discord
 import re
 
-# NO 'self' here. Just 'message'.
+class ImagePaginator(discord.ui.View):
+    def __init__(self, images, query, author):
+        super().__init__(timeout=60)
+        self.images, self.query, self.author = images, query, author
+        self.index = 0
+
+    def get_embed(self):
+        embed = discord.Embed(title=f"Results: {self.query}", color=discord.Color.blue())
+        embed.set_image(url=self.images[self.index])
+        embed.set_footer(text=f"Image {self.index + 1}/{len(self.images)} | Requested by {self.author.display_name}")
+        return embed
+
+    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.gray)
+    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return await interaction.response.send_message("not yours!", ephemeral=True)
+        self.index = (self.index - 1) % len(self.images)
+        await interaction.response.edit_message(embed=self.get_embed())
+
+    @discord.ui.button(label="➡️", style=discord.ButtonStyle.gray)
+    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return await interaction.response.send_message("not yours!", ephemeral=True)
+        self.index = (self.index + 1) % len(self.images)
+        await interaction.response.edit_message(embed=self.get_embed())
+        
 async def check_and_fix_embeds(message: discord.Message) -> bool:
     """
     Scans for broken links, fixes them, reposts, and deletes original.

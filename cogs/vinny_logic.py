@@ -245,10 +245,8 @@ class VinnyLogic(commands.Cog):
                         raw_prompt = args.get("prompt", cleaned_content)
                         
                         # --- FIX 1: SCRUB THE BOT'S NAME FROM THE PROMPT ---
-                        # This stops him from thinking "Vinny draw x" means "Draw Vinny and x"
                         clean_prompt = re.sub(r'\b(vinny|vincenzo|vin|draw|paint|make|generate|please)\b', '', raw_prompt, flags=re.IGNORECASE).strip()
                         
-                        # If we scrubbed everything away, revert to raw (e.g. if the prompt was just "draw")
                         if len(clean_prompt) < 2: 
                             clean_prompt = raw_prompt
 
@@ -256,6 +254,30 @@ class VinnyLogic(commands.Cog):
                         final_prompt = await image_tasks.handle_image_request(self.bot, message, clean_prompt, previous_prompt)
                         if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
+                    elif intent == "search_google_images": # <--- NEW INTENT HANDLER
+                        search_query = args.get("query") or cleaned_content
+                        
+                        # Scrub common trigger words for a cleaner search
+                        search_query = re.sub(r'\b(find|search|look for|picture of|photo of|google)\b', '', search_query, flags=re.IGNORECASE).strip()
+                        
+                        if not search_query:
+                            await message.reply("ya gotta tell me what to look for, pal.")
+                        else:
+                            # Calls the function in utils/api_clients.py
+                            results = await api_clients.search_google_images(
+                                self.bot.http_session, 
+                                self.bot.GEMINI_API_KEY, 
+                                self.bot.SEARCH_ENGINE_ID, 
+                                search_query
+                            )
+                            
+                            if results:
+                                # Uses the Paginator from cogs/helpers/utilities.py
+                                view = utilities.ImagePaginator(results, search_query, message.author)
+                                await message.reply(embed=view.get_embed(), view=view)
+                            else:
+                                await message.reply("i looked everywhere, nothin'.")
+
                     elif intent == "generate_user_portrait": 
                         # --- MULTI-USER TAGGING LOGIC ---
                         target_str = args.get("target", "me")

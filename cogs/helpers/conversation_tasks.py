@@ -590,124 +590,85 @@ from utils import api_clients
 
 async def summarize_url(client, http_session, url):
     """
-    Highly robust summarizer that uses multiple 'disguises' and an archive fallback
-    to bypass bot detection (403s), cleans content using Readability, and summarizes via Gemini.
+    Ultra-Robust summarizer with a Googlebot fallback and Archive API check.
     """
-    logging.info(f"--- 🌐 STARTING FORENSIC SUMMARIZATION: {url} ---")
+    logging.info(f"--- 🌐 SUMMARIZATION START: {url} ---")
     
-    # Define our different disguises (Headers)
     attempts = [
         {
-            "name": "Desktop Chrome (Ultra-Robust)",
+            "name": "Desktop Chrome",
             "headers": {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Language": "en-US,en;q=0.9",
-                "DNT": "1",
-                "Upgrade-Insecure-Requests": "1",
-                "Referer": "https://www.google.com/",
-                "Cache-Control": "max-age=0"
+                "Referer": "https://www.google.com/"
             }
         },
         {
-            "name": "Mobile Safari (The Sneak)",
+            "name": "Googlebot (The Skeleton Key)", # Many news sites unlock for Googlebot
             "headers": {
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Referer": "https://t.co/" # Looks like a click from X/Twitter
+                "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
             }
         }
     ]
 
     html = None
-    title = "Unknown Article"
-
-    # --- PHASE 1: THE DISGUISE LOOP ---
     for i, attempt in enumerate(attempts):
         try:
-            logging.info(f"Attempt {i+1} using {attempt['name']}...")
+            logging.info(f"Attempt {i+1} ({attempt['name']})...")
             async with http_session.get(url, headers=attempt['headers'], timeout=12) as response:
-                logging.info(f"Response Status: {response.status}")
-                
                 if response.status == 200:
                     html = await response.text()
-                    logging.info(f"✅ Success using {attempt['name']}!")
+                    logging.info(f"✅ Success with {attempt['name']}")
                     break
-                elif response.status == 403:
-                    logging.warning(f"🚫 403 Forbidden on {attempt['name']}. Switching disguise...")
-                    continue
-                else:
-                    logging.warning(f"⚠️ Unexpected status {response.status}. Trying next disguise...")
-                    continue
-        except asyncio.TimeoutError:
-            logging.error(f"🕒 Timeout on {attempt['name']}.")
-            continue
+                logging.warning(f"❌ {attempt['name']} got {response.status}")
         except Exception as e:
-            logging.error(f"🚨 Attempt {i+1} encountered an error: {e}", exc_info=True)
-            continue
+            logging.error(f"Attempt {i+1} error: {e}")
 
-    # --- PHASE 2: THE WAYBACK MACHINE NUKE (Last Resort) ---
+    # ARCHIVE FALLBACK (Fixed URL format)
     if not html:
-        logging.info("All disguises failed or were blocked. Attempting Wayback Machine fallback...")
-        archive_url = f"https://web.archive.org/web/2/{url}" 
+        logging.info("Trying Wayback Availability API...")
+        api_url = f"http://archive.org/wayback/available?url={url}"
         try:
-            async with http_session.get(archive_url, timeout=15) as resp:
-                if resp.status == 200:
-                    html = await resp.text()
-                    logging.info("📜 Successfully retrieved cached version from Wayback Machine!")
-                else:
-                    logging.error(f"Archive also failed with status: {resp.status}")
-                    return "i tried every disguise and even checked the archives, but that site's got me blocked like a bad ex."
+            async with http_session.get(api_url, timeout=10) as resp:
+                data = await resp.json()
+                if snapshots := data.get("archived_snapshots"):
+                    closest = snapshots.get("closest")
+                    if closest and closest.get("available"):
+                        async with http_session.get(closest["url"]) as archive_resp:
+                            html = await archive_resp.text()
+                            logging.info("📜 Success via Wayback Machine!")
         except Exception as e:
             logging.error(f"Archive fallback failed: {e}")
-            return "the site is a fortress and the archives are down. i can't get in, pal."
 
-    # --- PHASE 3: EXTRACTION (Readability) ---
+    if not html: return "i tried every disguise, but that site's got a restraining order against me."
+
+    # Process with Readability & Gemini (Keep your existing extraction/AI logic here)
     try:
-        logging.info("Cleaning HTML with Readability...")
         doc = Document(html)
         title = doc.title()
-        summary_html = doc.summary() # Extracts the main article body
-        
-        # Strip HTML tags and clean whitespace
-        soup = BeautifulSoup(summary_html, 'html.parser')
+        soup = BeautifulSoup(doc.summary(), 'html.parser')
         clean_text = ' '.join(soup.get_text(separator=' ').split())
         
-        logging.info(f"Extracted {len(clean_text)} characters of text.")
+        if len(clean_text) < 200: return "got the page, but it's empty. maybe a login wall?"
 
-        # Fallback if Readability returned garbage
-        if len(clean_text) < 250:
-            logging.warning("Readability extraction too short. Attempting raw body dump...")
-            clean_text = ' '.join(BeautifulSoup(html, 'html.parser').body.get_text(separator=' ').split())
-
-    except Exception as e:
-        logging.error("Content extraction failed entirely.", exc_info=True)
-        return "i grabbed the page, but the code is such a mess i can't find the story."
-
-    if len(clean_text) < 200:
-        return "i got the page, but it's practically empty. might be a paywall or a video."
-
-    # --- PHASE 4: AI SUMMARIZATION (Gemini) ---
-    try:
-        # Limit text to ~28k characters to stay safely within context limits
-        final_content = clean_text[:28000]
-        
-        prompt = (
-            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'. "
-            f"Capture the main points and tone accurately. Write it in your unique, slightly cynical, flirty, and helpful voice.\n\n"
-            f"ARTICLE CONTENT:\n{final_content}"
-        )
-        
-        logging.info(f"Sending request to Gemini for title: '{title}'")
+        prompt = f"Summarize this article titled '{title}' in your witty, flirty, chaotic voice:\n\n{clean_text[:25000]}"
         summary = await api_clients.generate_text_with_genai(client, prompt)
-        
-        if summary:
-            logging.info("✨ Summary successfully generated.")
-            return f"**{title}**\n\n{summary}"
-        else:
-            logging.error("Gemini returned an empty response.")
-            return "i read the whole thing, but my brain's a bit foggy. couldn't summarize it."
-
+        return f"**{title}**\n\n{summary}" if summary else "brain fog. couldn't summarize."
+    except Exception:
+        return "the page code is a mess, i can't make sense of it."
+    
+async def search_google_images(http_session, api_key, search_engine_id, query):
+    """Queries Google Custom Search for images."""
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "q": query, "key": api_key, "cx": search_engine_id,
+        "searchType": "image", "num": 10
+    }
+    try:
+        async with http_session.get(url, params=params) as response:
+            if response.status == 200:
+                data = await response.json()
+                return [item["link"] for item in data.get("items", []) if "link" in item]
     except Exception as e:
-        logging.error(f"AI Generation Stage failed: {e}", exc_info=True)
-        return "i read the article, but trying to summarize it fried my circuits."
+        logging.error(f"Image search error: {e}")
+    return []

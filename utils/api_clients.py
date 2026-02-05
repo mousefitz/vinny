@@ -15,13 +15,12 @@ from google.genai import types
 model_name = "imagen-4.0-fast-generate-001:predict"
 
 # --- PRICING CONSTANTS ---
-IMAGEN_FAST_PRICE = 0.02     # Imagen 4 Fast
-IMAGEN_STD_PRICE = 0.04      # Standard
-IMAGEN_ULTRA_PRICE = 0.06    # Ultra
-GEMINI_INPUT_PRICE = 0.30    # $0.30 per 1M Input Tokens
-GEMINI_OUTPUT_PRICE = 2.50   # $2.50 per 1M Output Tokens
-
-# --- COST CALCULATOR (Pure Math) ---
+IMAGEN_FAST_PRICE = 0.02
+IMAGEN_STD_PRICE = 0.04
+IMAGEN_ULTRA_PRICE = 0.06
+GEMINI_INPUT_PRICE = 0.30
+GEMINI_OUTPUT_PRICE = 2.50
+GOOGLE_SEARCH_PRICE = 0.005  # $5 per 1,000 queries
 
 def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
     """Calculates the estimated cost based on usage."""
@@ -31,13 +30,16 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
         unit_cost = IMAGEN_STD_PRICE
         if "fast" in model_name: unit_cost = IMAGEN_FAST_PRICE
         elif "ultra" in model_name: unit_cost = IMAGEN_ULTRA_PRICE
-        elif "imagen-4" in model_name: unit_cost = IMAGEN_STD_PRICE
         total_cost = unit_cost * count
 
     elif usage_type == "text":
         cost_in = (input_tokens / 1_000_000) * GEMINI_INPUT_PRICE
         cost_out = (output_tokens / 1_000_000) * GEMINI_OUTPUT_PRICE
         total_cost = cost_in + cost_out
+    
+    # NEW: Track Google Search Costs
+    elif usage_type == "search":
+        total_cost = GOOGLE_SEARCH_PRICE * count
         
     return round(total_cost, 6)
 
@@ -156,3 +158,21 @@ async def get_horoscope(http_session: aiohttp.ClientSession, sign: str):
     except Exception:
         logging.error("Horoscope API call failed.", exc_info=True)
     return None
+
+# --- Google Custom Search API for Image Search ---
+
+async def search_google_images(http_session, api_key, search_engine_id, query):
+    """Queries Google Custom Search for images."""
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "q": query, "key": api_key, "cx": search_engine_id,
+        "searchType": "image", "num": 10
+    }
+    try:
+        async with http_session.get(url, params=params) as response:
+            if response.status == 200:
+                data = await response.json()
+                return [item["link"] for item in data.get("items", []) if "link" in item]
+    except Exception as e:
+        logging.error(f"Image search error: {e}")
+    return []

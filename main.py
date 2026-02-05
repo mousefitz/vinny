@@ -65,6 +65,7 @@ class VinnyBot(commands.Bot):
         self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
         self.FIREBASE_B64 = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_BASE64')
         self.APP_ID = os.getenv('__app_id', 'default-app-id')
+        self.SEARCH_ENGINE_ID = os.getenv("SEARCH_ENGINE_ID")
 
         # --- Validate Configuration ---
         if not self.DISCORD_BOT_TOKEN or not self.GEMINI_API_KEY:
