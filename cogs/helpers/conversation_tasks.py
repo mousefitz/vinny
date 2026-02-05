@@ -10,6 +10,25 @@ from bs4 import BeautifulSoup
 from utils import api_clients
 from readability import Document
 
+async def get_keywords_for_memory_search(bot_instance, text: str):
+    """Extracts keywords from text for memory search."""
+    if len(text) < 10:
+        return []
+    
+    prompt = f"Extract 3-5 key topics or keywords from this text for memory search: '{text}'. Return as a comma-separated list."
+    try:
+        response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME,
+            contents=[prompt],
+            config=bot_instance.GEMINI_TEXT_CONFIG
+        )
+        if response and response.text:
+            keywords = [k.strip() for k in response.text.split(',')]
+            return keywords
+    except Exception as e:
+        logging.error(f"Failed to extract keywords: {e}")
+    return []
+
 async def handle_direct_reply(bot_instance, message: discord.Message):
     """Handles a direct reply (via reply or mention) to one of the bot's messages."""
     
@@ -561,76 +580,134 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
     keywords = [w for w in words if w not in ignore_words and len(w) > 3]
     return keywords[:3]
 
+import logging
+import aiohttp
+import discord
+import asyncio
+from bs4 import BeautifulSoup
+from readability import Document
+from utils import api_clients
+
 async def summarize_url(client, http_session, url):
     """
-    Highly robust summarizer with forensic logging to catch silent failures.
+    Highly robust summarizer that uses multiple 'disguises' and an archive fallback
+    to bypass bot detection (403s), cleans content using Readability, and summarizes via Gemini.
     """
     logging.info(f"--- 🌐 STARTING FORENSIC SUMMARIZATION: {url} ---")
     
-    try:
-        # 1. FETCHING (The most likely place for a hang)
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Referer": "https://www.google.com/" # Helps sneak past news firewalls
+    # Define our different disguises (Headers)
+    attempts = [
+        {
+            "name": "Desktop Chrome (Ultra-Robust)",
+            "headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "Accept-Language": "en-US,en;q=0.9",
+                "DNT": "1",
+                "Upgrade-Insecure-Requests": "1",
+                "Referer": "https://www.google.com/",
+                "Cache-Control": "max-age=0"
+            }
+        },
+        {
+            "name": "Mobile Safari (The Sneak)",
+            "headers": {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Mobile/15E148 Safari/604.1",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Referer": "https://t.co/" # Looks like a click from X/Twitter
+            }
         }
-        
+    ]
+
+    html = None
+    title = "Unknown Article"
+
+    # --- PHASE 1: THE DISGUISE LOOP ---
+    for i, attempt in enumerate(attempts):
         try:
-            logging.info(f"Attempting HTTP GET to {url}...")
-            async with http_session.get(url, headers=headers, timeout=10) as response:
-                logging.info(f"Response received! Status: {response.status}")
-                if response.status != 200:
-                    return f"i couldn't reach that website. (Status: {response.status})"
-                html = await response.text()
-                logging.info(f"Successfully downloaded {len(html)} characters of HTML.")
+            logging.info(f"Attempt {i+1} using {attempt['name']}...")
+            async with http_session.get(url, headers=attempt['headers'], timeout=12) as response:
+                logging.info(f"Response Status: {response.status}")
+                
+                if response.status == 200:
+                    html = await response.text()
+                    logging.info(f"✅ Success using {attempt['name']}!")
+                    break
+                elif response.status == 403:
+                    logging.warning(f"🚫 403 Forbidden on {attempt['name']}. Switching disguise...")
+                    continue
+                else:
+                    logging.warning(f"⚠️ Unexpected status {response.status}. Trying next disguise...")
+                    continue
         except asyncio.TimeoutError:
-            logging.error(f"Request timed out for {url}")
-            return "that site is takin' forever. i'm out."
+            logging.error(f"🕒 Timeout on {attempt['name']}.")
+            continue
         except Exception as e:
-            logging.error(f"HTTP GET failed for {url}", exc_info=True)
-            return "couldn't connect to the site. technical difficulties."
+            logging.error(f"🚨 Attempt {i+1} encountered an error: {e}", exc_info=True)
+            continue
 
-        # 2. PARSING (Where silent crashes happen if HTML is weird)
+    # --- PHASE 2: THE WAYBACK MACHINE NUKE (Last Resort) ---
+    if not html:
+        logging.info("All disguises failed or were blocked. Attempting Wayback Machine fallback...")
+        archive_url = f"https://web.archive.org/web/2/{url}" 
         try:
-            logging.info("Initializing Readability Document...")
-            doc = Document(html)
-            title = doc.title()
-            summary_html = doc.summary()
-            logging.info(f"Readability parsed article: '{title}'")
+            async with http_session.get(archive_url, timeout=15) as resp:
+                if resp.status == 200:
+                    html = await resp.text()
+                    logging.info("📜 Successfully retrieved cached version from Wayback Machine!")
+                else:
+                    logging.error(f"Archive also failed with status: {resp.status}")
+                    return "i tried every disguise and even checked the archives, but that site's got me blocked like a bad ex."
         except Exception as e:
-            logging.error(f"Readability-lxml CRASHED on {url}", exc_info=True)
-            return "i tried to read it, but the page code is a dumpster fire."
+            logging.error(f"Archive fallback failed: {e}")
+            return "the site is a fortress and the archives are down. i can't get in, pal."
 
-        # 3. CLEANING
-        try:
-            soup = BeautifulSoup(summary_html, 'html.parser')
-            clean_text = ' '.join(soup.get_text(separator=' ').split())
-            logging.info(f"Cleaned text length: {len(clean_text)}")
-        except Exception as e:
-            logging.error("BeautifulSoup cleaning failed", exc_info=True)
-            return "failed to clean up the page text."
+    # --- PHASE 3: EXTRACTION (Readability) ---
+    try:
+        logging.info("Cleaning HTML with Readability...")
+        doc = Document(html)
+        title = doc.title()
+        summary_html = doc.summary() # Extracts the main article body
+        
+        # Strip HTML tags and clean whitespace
+        soup = BeautifulSoup(summary_html, 'html.parser')
+        clean_text = ' '.join(soup.get_text(separator=' ').split())
+        
+        logging.info(f"Extracted {len(clean_text)} characters of text.")
 
+        # Fallback if Readability returned garbage
         if len(clean_text) < 250:
-            logging.warning(f"Insufficient text found ({len(clean_text)} chars).")
-            return "that page is empty or i'm blocked by a paywall/bot-check."
+            logging.warning("Readability extraction too short. Attempting raw body dump...")
+            clean_text = ' '.join(BeautifulSoup(html, 'html.parser').body.get_text(separator=' ').split())
 
-        # 4. AI GENERATION
+    except Exception as e:
+        logging.error("Content extraction failed entirely.", exc_info=True)
+        return "i grabbed the page, but the code is such a mess i can't find the story."
+
+    if len(clean_text) < 200:
+        return "i got the page, but it's practically empty. might be a paywall or a video."
+
+    # --- PHASE 4: AI SUMMARIZATION (Gemini) ---
+    try:
+        # Limit text to ~28k characters to stay safely within context limits
+        final_content = clean_text[:28000]
+        
         prompt = (
-            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'.\n\n"
-            f"CONTENT:\n{clean_text[:25000]}"
+            f"Please provide a concise, witty, and helpful summary (TL;DR) of the following article titled '{title}'. "
+            f"Capture the main points and tone accurately. Write it in your unique, slightly cynical, flirty, and helpful voice.\n\n"
+            f"ARTICLE CONTENT:\n{final_content}"
         )
         
-        logging.info("Calling Gemini for summary...")
+        logging.info(f"Sending request to Gemini for title: '{title}'")
         summary = await api_clients.generate_text_with_genai(client, prompt)
         
         if summary:
-            logging.info("Summary generated successfully.")
+            logging.info("✨ Summary successfully generated.")
             return f"**{title}**\n\n{summary}"
-        
-        logging.error("Gemini returned an empty string.")
-        return "read it, but i got nothin'. my brain's empty."
+        else:
+            logging.error("Gemini returned an empty response.")
+            return "i read the whole thing, but my brain's a bit foggy. couldn't summarize it."
 
     except Exception as e:
-        # This is the "Safety Net" - it will log the EXACT line that caused the bot to stop
-        logging.critical(f"UNHANDLED EXCEPTION in summarize_url", exc_info=True)
-        return "everything went black. check the logs."
+        logging.error(f"AI Generation Stage failed: {e}", exc_info=True)
+        return "i read the article, but trying to summarize it fried my circuits."
