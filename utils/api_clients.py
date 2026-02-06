@@ -168,14 +168,17 @@ async def search_google_images(http_session, api_key, query):
         'X-API-KEY': api_key,
         'Content-Type': 'application/json'
     }
-    # We send the query as a JSON payload
-    payload = json.dumps({"q": query})
+    
+    payload = json.dumps({
+    "q": query,
+    "safe": "off" 
+})
 
     try:
         async with http_session.post(url, headers=headers, data=payload) as response:
             if response.status == 200:
                 data = await response.json()
-                # Extract the direct image URLs from the response
+                
                 return [img["imageUrl"] for img in data.get("images", [])[:10]]
             else:
                 error_body = await response.text()
