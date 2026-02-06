@@ -9,3 +9,4 @@ firebase-admin
 cachetools
 readability-lxml
 lxml
+fal-client
