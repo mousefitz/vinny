@@ -170,9 +170,14 @@ async def search_google_images(http_session, api_key, search_engine_id, query):
     }
     try:
         async with http_session.get(url, params=params) as response:
-            if response.status == 200:
-                data = await response.json()
-                return [item["link"] for item in data.get("items", []) if "link" in item]
+            # --- ADD THIS LOGGING TO SEE THE REAL PROBLEM ---
+            if response.status != 200:
+                error_body = await response.text()
+                logging.error(f"Google Search API Error: {response.status} - {error_body}")
+                return []
+                
+            data = await response.json()
+            return [item["link"] for item in data.get("items", []) if "link" in item]
     except Exception as e:
-        logging.error(f"Image search error: {e}")
+        logging.error(f"Image search exception: {e}")
     return []
