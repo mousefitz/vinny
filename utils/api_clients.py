@@ -26,11 +26,15 @@ IMAGEN_ULTRA_PRICE = 0.06
 GEMINI_INPUT_PRICE = 0.30
 GEMINI_OUTPUT_PRICE = 2.50
 GOOGLE_SEARCH_PRICE = 0.005  # $5 per 1,000 queries
-FLUX_PRICE = 0.005 # $0.005 per image (2026 standard)
+FAL_LLM_PRICE = 0.001         # $0.001 per request
+FLUX_PRICE = 0.005 # $0.005 per Megapixel (approx 1 image)
+SERPER_SEARCH_PRICE = 0.001   # $1.00 per 1,000 searches
 
 def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
     """Calculates the estimated cost based on usage."""
     total_cost = 0.0
+    
+    model_lower = model_name.lower()
     
     if usage_type == "image":
         # Flux 2.1 Flash is significantly cheaper than Imagen
@@ -43,13 +47,18 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
         total_cost = unit_cost * count
 
     elif usage_type == "text":
-        cost_in = (input_tokens / 1_000_000) * GEMINI_INPUT_PRICE
-        cost_out = (output_tokens / 1_000_000) * GEMINI_OUTPUT_PRICE
-        total_cost = cost_in + cost_out
+        if "fal-ai" in model_lower or "enterprise" in model_lower:
+            # Fal.ai LLM is billed per request, not per token
+            total_cost = FAL_LLM_PRICE * count
+        else:
+            # Gemini standard token-based billing
+            cost_in = (input_tokens / 1_000_000) * GEMINI_INPUT_PRICE
+            cost_out = (output_tokens / 1_000_000) * GEMINI_OUTPUT_PRICE
+            total_cost = cost_in + cost_out
     
-    # NEW: Track Google Search Costs
-    elif usage_type == "search":
-        total_cost = GOOGLE_SEARCH_PRICE * count
+    # 3. Search Costs (Serper)
+    elif usage_type == "search" or usage_type == "google_search":
+        total_cost = SERPER_SEARCH_PRICE * count
         
     return round(total_cost, 6)
 
