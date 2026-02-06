@@ -267,7 +267,7 @@ class VinnyLogic(commands.Cog):
                             results = await api_clients.search_google_images(
                                 self.bot.http_session, 
                                 self.bot.GEMINI_API_KEY, 
-                                self.bot.SEARCH_ENGINE_ID, 
+                                self.bot.SERPER_API_KEY, 
                                 search_query
                             )
                             

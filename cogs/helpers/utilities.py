@@ -8,26 +8,33 @@ import re
 class ImagePaginator(discord.ui.View):
     def __init__(self, images, query, author):
         super().__init__(timeout=60)
-        self.images, self.query, self.author = images, query, author
-        self.index = 0
+        self.images = images
+        self.query = query
+        self.author = author
+        self.current_page = 0
 
     def get_embed(self):
-        embed = discord.Embed(title=f"Results: {self.query}", color=discord.Color.blue())
-        embed.set_image(url=self.images[self.index])
-        embed.set_footer(text=f"Image {self.index + 1}/{len(self.images)} | Requested by {self.author.display_name}")
+        embed = discord.Embed(
+            title=f"Search Results: {self.query}",
+            description=f"Image {self.current_page + 1} of {len(self.images)}",
+            color=discord.Color.blue()
+        )
+        # This is the line that makes it an actual image in the chat!
+        embed.set_image(url=self.images[self.current_page])
+        embed.set_footer(text=f"Requested by {self.author.display_name}")
         return embed
 
-    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.gray)
-    async def prev(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.author: return await interaction.response.send_message("not yours!", ephemeral=True)
-        self.index = (self.index - 1) % len(self.images)
-        await interaction.response.edit_message(embed=self.get_embed())
+    @discord.ui.button(label="Prev", style=discord.ButtonStyle.gray)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return
+        self.current_page = (self.current_page - 1) % len(self.images)
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
-    @discord.ui.button(label="➡️", style=discord.ButtonStyle.gray)
-    async def next(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.author: return await interaction.response.send_message("not yours!", ephemeral=True)
-        self.index = (self.index + 1) % len(self.images)
-        await interaction.response.edit_message(embed=self.get_embed())
+    @discord.ui.button(label="Next", style=discord.ButtonStyle.gray)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.author: return
+        self.current_page = (self.current_page + 1) % len(self.images)
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
         
 async def check_and_fix_embeds(message: discord.Message) -> bool:
     """

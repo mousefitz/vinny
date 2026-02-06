@@ -161,23 +161,25 @@ async def get_horoscope(http_session: aiohttp.ClientSession, sign: str):
 
 # --- Google Custom Search API for Image Search ---
 
-async def search_google_images(http_session, api_key, search_engine_id, query):
-    """Queries Google Custom Search for images."""
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "q": query, "key": api_key, "cx": search_engine_id,
-        "searchType": "image", "num": 10
+async def search_google_images(http_session, api_key, query):
+    """Queries Serper.dev for images and returns a list of URLs."""
+    url = "https://google.serper.dev/images"
+    headers = {
+        'X-API-KEY': api_key,
+        'Content-Type': 'application/json'
     }
+    # We send the query as a JSON payload
+    payload = json.dumps({"q": query})
+
     try:
-        async with http_session.get(url, params=params) as response:
-            # --- ADD THIS LOGGING TO SEE THE REAL PROBLEM ---
-            if response.status != 200:
+        async with http_session.post(url, headers=headers, data=payload) as response:
+            if response.status == 200:
+                data = await response.json()
+                # Extract the direct image URLs from the response
+                return [img["imageUrl"] for img in data.get("images", [])[:10]]
+            else:
                 error_body = await response.text()
-                logging.error(f"Google Search API Error: {response.status} - {error_body}")
-                return []
-                
-            data = await response.json()
-            return [item["link"] for item in data.get("items", []) if "link" in item]
+                logging.error(f"Serper API Error: {response.status} - {error_body}")
     except Exception as e:
-        logging.error(f"Image search exception: {e}")
+        logging.error(f"Exception during Serper image search: {e}")
     return []
