@@ -266,7 +266,6 @@ class VinnyLogic(commands.Cog):
                             # Calls the function in utils/api_clients.py
                             results = await api_clients.search_google_images(
                                 self.bot.http_session, 
-                                self.bot.GEMINI_API_KEY, 
                                 self.bot.SERPER_API_KEY, 
                                 search_query
                             )
