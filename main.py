@@ -66,7 +66,7 @@ class VinnyBot(commands.Bot):
         self.FIREBASE_B64 = os.getenv('GOOGLE_APPLICATION_CREDENTIALS_BASE64')
         self.APP_ID = os.getenv('__app_id', 'default-app-id')
         self.SERPER_API_KEY = os.getenv("SERPER_API_KEY")
-        
+        self.FAL_KEY = os.getenv("FAL_KEY")
         # --- Validate Configuration ---
         if not self.DISCORD_BOT_TOKEN or not self.GEMINI_API_KEY:
             logging.critical("Essential environment variables are not set.")

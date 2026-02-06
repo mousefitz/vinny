@@ -5,14 +5,19 @@ import json
 import os
 from datetime import datetime
 from typing import Coroutine
-
+import fal_client
+import asyncio
 import aiohttp
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from google.genai import types
 
+# --- GLOBAL LOCK ---
+# This ensures only one image generation happens at a time across the whole bot
+IMAGE_LOCK = asyncio.Lock()
+
 # --- IMAGEN MODEL NAME CONSTANT ---
-model_name = "imagen-4.0-fast-generate-001:predict"
+model_name = "fal-ai/flux-2/flash"
 
 # --- PRICING CONSTANTS ---
 IMAGEN_FAST_PRICE = 0.02
@@ -21,15 +26,20 @@ IMAGEN_ULTRA_PRICE = 0.06
 GEMINI_INPUT_PRICE = 0.30
 GEMINI_OUTPUT_PRICE = 2.50
 GOOGLE_SEARCH_PRICE = 0.005  # $5 per 1,000 queries
+FLUX_PRICE = 0.005 # $0.005 per image (2026 standard)
 
 def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, output_tokens=0):
     """Calculates the estimated cost based on usage."""
     total_cost = 0.0
     
     if usage_type == "image":
-        unit_cost = IMAGEN_STD_PRICE
-        if "fast" in model_name: unit_cost = IMAGEN_FAST_PRICE
-        elif "ultra" in model_name: unit_cost = IMAGEN_ULTRA_PRICE
+        # Flux 2.1 Flash is significantly cheaper than Imagen
+        if "flux" in model_name.lower():
+            unit_cost = 0.005 
+        else:
+            unit_cost = IMAGEN_STD_PRICE
+            if "fast" in model_name: unit_cost = IMAGEN_FAST_PRICE
+            elif "ultra" in model_name: unit_cost = IMAGEN_ULTRA_PRICE
         total_cost = unit_cost * count
 
     elif usage_type == "text":
@@ -43,41 +53,53 @@ def calculate_cost(model_name, usage_type="image", count=1, input_tokens=0, outp
         
     return round(total_cost, 6)
 
-# --- Google Cloud Imagen API ---
+# --- Flux Image Generation ---
 
-async def generate_image_with_genai(client, prompt, model="imagen-4.0-fast-generate-001"):
+async def generate_image_with_genai(client, prompt, model=model_name):
     """
-    Generates an image using the google-genai SDK.
-    Returns: (image_bytes_io, count)
+    Generates an image using Fal.ai (Flux) while maintaining the original 
+    function signature. Includes a global lock and relaxed safety settings.
     """
-    try:
-        # Call the API
-        response = await client.aio.models.generate_images(
-            model=model,
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio="1:1",
-                person_generation="allow_adult"
+    fal_key = os.getenv("FAL_KEY")
+    if not fal_key:
+        logging.error("FAL_KEY not found in environment variables.")
+        return None, 0
+
+    os.environ["FAL_KEY"] = fal_key
+
+    # The Lock ensures Vinny only paints one masterpiece at a time
+    async with IMAGE_LOCK:
+        try:
+            logging.info(f"Requesting Flux image for prompt: {prompt[:50]}...")
+
+            # Using Fal.ai with the relaxed safety toggle
+            handler = await fal_client.submit_async(
+                model,
+                arguments={
+                    "prompt": prompt,
+                    "image_size": "square_hd",
+                    "enable_safety_checker": False # THE RELAXED TOGGLE
+                }
             )
-        )
-        
-        # Check for results
-        if response.generated_images:
-            image_bytes = response.generated_images[0].image.image_bytes
-            return io.BytesIO(image_bytes), 1
-        else:
-            # --- DEBUGGING REFUSALS ---
-            logging.warning("GenAI returned 0 images. Likely a Safety/Copyright refusal.")
-            try:
-                logging.warning(f"Full Response Details: {response.model_dump_json(indent=2)}")
-            except AttributeError:
-                logging.warning(f"Could not dump JSON. Raw Response: {response}")
             
-    except Exception as e:
-        logging.error(f"GenAI Image Generation failed: {e}")
-        
+            result = await handler.get()
+            image_url = result['images'][0]['url']
+            
+            # Download to BytesIO to remain compatible with your Discord upload logic
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url) as resp:
+                    if resp.status == 200:
+                        image_data = await resp.read()
+                        return io.BytesIO(image_data), 1
+                    else:
+                        logging.error(f"Failed to download image from Fal.ai: {resp.status}")
+                        
+        except Exception as e:
+            logging.error(f"Flux Generation failed: {e}")
+            
     return None, 0
+  
+# --- Google GenAI Text Generation ---
 
 async def generate_text_with_genai(client, prompt, model="gemini-2.0-flash"):
     """

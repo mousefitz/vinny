@@ -254,14 +254,14 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
 
             # 4. Generate the Image
             image_obj, count = await api_clients.generate_image_with_genai(
-                bot_instance.gemini_client,
+                bot_instance.FAL_KEY,
                 enhanced_prompt,
-                model="imagen-4.0-fast-generate-001" 
+                model="fal-ai/flux-2/flash" 
             )
 
             if image_obj and count > 0:
                 try:
-                    cost = api_clients.calculate_cost("imagen-4.0-fast-generate-001", "image", count=count)
+                    cost = api_clients.calculate_cost("fal-ai/flux-2/flash", "image", count=count)
                     today = datetime.datetime.now().strftime("%Y-%m-%d")
                     await bot_instance.firestore_service.update_usage_stats(today, {"images": count, "cost": cost})
                 except Exception: pass
