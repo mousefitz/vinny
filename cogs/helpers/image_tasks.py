@@ -1,4 +1,3 @@
-import asyncio
 import re
 import json
 import logging
@@ -12,20 +11,6 @@ from utils import api_clients
 
 # Setup Logger
 logger = logging.getLogger(__name__)
-
-# --- GLOBAL SETTINGS ---
-IMAGE_LOCK = asyncio.Lock()
-
-# The "Zero Anchor" logic: no defaults, no anchors, total artistic freedom.
-ZERO_ANCHOR_PROMPT = (
-    "You are a chaotic AI Art Director with total access to every art movement, "
-    "photography technique, and visual medium in human history.\n"
-    "1. **UNPREDICTABILITY:** Do NOT use examples or defaults."
-    "unless explicitly asked. Mentally pick a random coordinate in the history of visual expression (from 30,000 BC to 2026 AD).\n"
-    "2. **STYLE VARIANCE:** For every image, choose a new medium (e.g., wet plate collodion, "
-    "brutalist architecture, stop-motion felt, 1990s CCTV, 16th-century tapestry, or 8k Unreal Engine).\n"
-    "3. **LITERAL TRUTH:** Describe the textures, lighting, and camera lens literally. Avoid the 'AI-perfect' look."
-)
 
 # --- NEW HELPER: SANITIZE IMAGES ---
 def prepare_image_for_api(image_bytes):
@@ -83,9 +68,11 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             'face', 'skin', 'beard', 'glasses', 'tattoo', 'piercing', 
             'scar', 'clothes', 'clothing', 'hat', 'mask', 'gender'
         ]
-
+        PET_KEYWORDS = ['pet', 'dog', 'cat', 'bird', 'animal', 'horse', 'breed']
+        is_pet_requested = any(word in details.lower() for word in PET_KEYWORDS)
         for i, user in enumerate(target_users, 1):
             appearance_facts = []
+            pet_facts = []
             other_facts = []
             gender_fact = None
 
@@ -113,6 +100,8 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                     
                     if 'gender' in clean_key:
                         gender_fact = clean_value.title()
+                    elif any(keyword in clean_key for keyword in PET_KEYWORDS): # Use PET_KEYWORDS here
+                        pet_facts.append(f"{clean_key}: {clean_value}")
                     elif any(keyword in clean_key for keyword in appearance_keywords): 
                         appearance_facts.append(clean_value)
                     else: 
@@ -130,6 +119,12 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 visuals_block.append("Visuals: Undefined (You may invent a look)")
             
             char_str += f"[[VISUALS: {', '.join(visuals_block)}]] "
+
+            # Conditional Pet Integration
+            if pet_facts and is_pet_requested:
+                char_str += f"[[MANDATORY PETS: {', '.join(pet_facts)}]] "
+            elif pet_facts:
+                other_facts.extend(pet_facts)
 
             if other_facts:
                 random.shuffle(other_facts)
@@ -149,20 +144,21 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         source_data = "\n".join(character_definitions)
 
         director_instruction = (
-            f"{ZERO_ANCHOR_PROMPT}\n\n"
+            "You are an expert AI Art Director. You are famous for incorporating small, specific details about people into your art.\n\n"
             "**INPUT DATA:**\n"
             f"{source_data}\n"
             f"{user_request}\n\n"
             "**YOUR TASK:** Write a detailed image generation prompt following these priorities:\n"
-            "1. **VISUAL ACCURACY:** Describe characters exactly as defined in [[VISUALS]].\n"
-            "2. **SCENE DETAILS (MULTI-FACT):** Look at the [[TRIVIA]] tags. You MUST incorporate **2 to 3 specific details** "
-            "from that list and weave them together into a single cohesive, chaotic scene.\n"
-            "   - Example: If Trivia says 'hates birds', 'loves pizza', and 'is a mechanic', show them "
-            "frantically repairing a car engine while shielding a slice of pizza from a swarm of pigeons.\n"
-            "3. **COMPOSITION:** Use dynamic shots (e.g., Bird's eye view, Cinematic wide, Candid).\n"
-            "4. **ZERO ANCHOR STYLE:** Choose a drastically different medium for every request. Never repeat styles.\n\n"
-             "**OUTPUT:** Provide ONLY the final image prompt text."
+            "1. **VISUAL ACCURACY:** You MUST describe the characters exactly as defined in the [[VISUALS]] tags. Do not change their hair/clothes.\n"
+            "2. **SCENE DETAILS (CRITICAL):** Look at the [[TRIVIA]] tags. Pick **ONE specific detail** from that list and build the entire scene around it.\n"
+            "   - Example: If Trivia says 'collects stamps', show them holding a magnifying glass examining a rare stamp.\n"
+            "   - Example: If Trivia says 'hates birds', show them running away from a pigeon.\n"
+            "   - **DO NOT** just make them stand there. They must be engaging with their Trivia.\n"
+            "3. **COMPOSITION:** Use dynamic angles. No boring passport photos.\n"
+            "4. **ART STYLE:** Choose a unique art style.\n\n"
+            "**OUTPUT:** Provide ONLY the final image prompt text."
         )
+
         style_response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
             contents=[director_instruction]
@@ -202,15 +198,18 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             )
 
         prompt_rewriter_instruction = (
-            f"{ZERO_ANCHOR_PROMPT}\n\n"
+            "You are an AI Art Director. Refine the user's request into an image prompt.\n\n"
             f"{context_block}\n"
             "## CRITICAL INSTRUCTIONS:\n"
-            "1. **STRICT OBEDIENCE:** Include every specific action/object requested.\n"
-            "2. **UNPREDICTABLE STYLE:** Pick a drastically different medium/era every time.\n"
-            "3. **SYNC:** Your `reply_text` must describe the chaos you are painting.\n\n"
+            "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested. If they ask for 'Vinny eating a tire', that is the focus.\n"
+            "2. **STYLE:** Pick a unique style unless the user requested one.\n"
+            "3. **SYNC:** Your `reply_text` must describe the image you are creating.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
-            "Provide a single JSON object with 'core_subject', 'enhanced_prompt', and 'reply_text'."
+            "Provide a single JSON object with 3 keys:\n"
+            "- \"core_subject\" (Short title, e.g. 'The Pizza King')\n"
+            "- \"enhanced_prompt\" (The detailed image generation prompt)\n"
+            "- \"reply_text\" (Your chaotic/flirty response to the user describing what you painted)"
         )
         
         try:
@@ -230,7 +229,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 contents=[prompt_rewriter_instruction],
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.8, 
+                    temperature=0.7, 
                     safety_settings=safety_settings_off
                 )
             )
@@ -254,7 +253,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 "patience. art takes time, unlike your attention span.",
                 "i'm on it. this is gonna be messy.",
                 "loading the canvas... aka grabbing a napkin.",
-                "got it. preparing the masterpiece."
+                "got it. preparing the masterpiece.",
                 "mixing the paints... let's see what happens.",
                 "wiping the canvas... startin' fresh.",
                 "i got a wild idea for this one.",
