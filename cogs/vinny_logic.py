@@ -196,7 +196,15 @@ class VinnyLogic(commands.Cog):
                         async with message.channel.typing():
                             await conversation_tasks.handle_direct_reply(self.bot, message)
                         return # STOP HERE. Vinny chats and leaves.
-                        
+                    
+                    # --- C. REPLYING TO OTHERS BUT MENTIONING VINNY (NEW FIX) ---
+                    # If user replies to someone else (e.g. an image) and tags Vinny ("Vinny look at this")
+                    elif is_addressed:
+                        await self.update_vinny_mood()
+                        async with message.channel.typing():
+                            await conversation_tasks.handle_direct_reply(self.bot, message)
+                        return
+
                 except Exception as e:
                     logging.error(f"Error handling reply context: {e}")
 

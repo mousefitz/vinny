@@ -86,10 +86,44 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         f"2. Respond directly to the **intent**, not the text. Move the conversation forward immediately."
     )
 
+    # --- NEW: IMAGE HANDLING ---
+    api_contents = []
+    
+    # 1. Check for image in the REPLIED-TO message (The context)
+    if replied_to_message.attachments:
+        for att in replied_to_message.attachments:
+            if "image" in att.content_type:
+                try:
+                    image_bytes = await att.read()
+                    if len(image_bytes) < 8 * 1024 * 1024:
+                        image_part = types.Part.from_bytes(data=image_bytes, mime_type=att.content_type)
+                        api_contents.append(types.Content(role="user", parts=[image_part]))
+                        reply_prompt = f"[SYSTEM: The user is replying to the image attached above.]\n" + reply_prompt
+                        break
+                except Exception as e:
+                    logging.error(f"Failed to attach image context in reply: {e}")
+
+    # 2. Check for image in the CURRENT message (User sends image + text)
+    if message.attachments:
+         for att in message.attachments:
+            if "image" in att.content_type:
+                try:
+                    image_bytes = await att.read()
+                    if len(image_bytes) < 8 * 1024 * 1024:
+                        image_part = types.Part.from_bytes(data=image_bytes, mime_type=att.content_type)
+                        api_contents.append(types.Content(role="user", parts=[image_part]))
+                        reply_prompt = f"[SYSTEM: The user sent the image attached above.]\n" + reply_prompt
+                        break
+                except Exception as e:
+                    logging.error(f"Failed to attach image context in reply: {e}")
+
+    # Add the text prompt last
+    api_contents.append(types.Content(role="user", parts=[types.Part(text=reply_prompt)]))
+
     try:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
-            contents=[reply_prompt],
+            contents=api_contents,
             config=bot_instance.GEMINI_TEXT_CONFIG
         )
         
