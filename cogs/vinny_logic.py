@@ -141,24 +141,33 @@ class VinnyLogic(commands.Cog):
                     has_image = (ref_msg.attachments or ref_msg.embeds)
                     
                     if should_check_edit and has_image:
-                        trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix", "modify"]
+                        # --- 1. STRICT COMMAND TRIGGERS ---
+                        # Only words that are 100% commands.
+                        # We removed "make", "put", "give" because they are too conversational.
+                        trigger_words = ["add", "change", "remove", "draw", "paint", "edit", "fix", "remix", "modify", "crop", "resize"]
                         
-                        # --- 1. SMART TRIGGER DETECTION ---
+                        # Clean the message to find the first real word
                         clean_lower = re.sub(r'\b(vinny|vincenzo|vin|bot)\b', '', cleaned_content.lower()).strip()
-                        clean_lower = re.sub(r'^[^a-z0-9]+', '', clean_lower).strip()
+                        clean_lower = re.sub(r'^[^a-z0-9]+', '', clean_lower).strip() # Remove emojis/symbols
                         first_word = clean_lower.split(' ')[0] if clean_lower else ""
                         
+                        # CHECK 1: Is it a forced command?
                         is_edit = (first_word in trigger_words)
+                        
+                        # CHECK 2: If not a command, ask the AI (The "Smart" Check)
+                        # The AI will see "Ewww" and return FALSE because of the rules we added.
                         if not is_edit: 
                             try:
                                 is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
-                            except: is_edit = False
+                            except: 
+                                is_edit = False
 
+                        # --- EXECUTE EDIT (Only if TRUE) ---
                         if is_edit:
                             logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
                             async with message.channel.typing():
                                 
-                                # --- DOWNLOAD SOURCE IMAGE ---
+                                # Download Image
                                 input_image_bytes = None
                                 if ref_msg.attachments:
                                     for att in ref_msg.attachments:
@@ -171,9 +180,9 @@ class VinnyLogic(commands.Cog):
                                         async with aiohttp.ClientSession() as session:
                                             async with session.get(ref_msg.embeds[0].image.url) as resp:
                                                 if resp.status == 200: input_image_bytes = await resp.read()
-                                    except Exception: pass
+                                    except: pass
 
-                                # --- GET PROMPT ---
+                                # Get Previous Prompt
                                 previous_prompt = None
                                 if ref_msg.embeds and ref_msg.embeds[0].footer.text:
                                     footer_text = ref_msg.embeds[0].footer.text
@@ -182,7 +191,6 @@ class VinnyLogic(commands.Cog):
                                     previous_prompt = self.channel_image_history.get(message.channel.id)
 
                                 # --- DECISION: STANDARD EDIT OR PORTRAIT INJECTION? ---
-                                # Check if the user said "me", "myself", "i" OR mentioned someone
                                 is_self_ref = re.search(r'\b(me|myself|i)\b', cleaned_content, re.IGNORECASE)
                                 mentions = [m for m in message.mentions if m.id != self.bot.user.id]
 
@@ -191,19 +199,18 @@ class VinnyLogic(commands.Cog):
                                     target_users = []
                                     if is_self_ref: target_users.append(message.author)
                                     target_users.extend(mentions)
-                                    # Unique list
-                                    target_users = list(set(target_users))
+                                    target_users = list(set(target_users)) 
                                     
                                     await image_tasks.handle_portrait_request(
                                         self.bot, 
                                         message, 
                                         target_users, 
-                                        details=cleaned_content, # "Add me doing X"
+                                        details=cleaned_content,
                                         previous_prompt=previous_prompt,
                                         input_image_bytes=input_image_bytes
                                     )
                                 else:
-                                    # Standard Edit (e.g. "Add a milkshake")
+                                    # Standard Edit (e.g. "Change the background")
                                     await image_tasks.handle_image_request(
                                         self.bot, 
                                         message, 
