@@ -30,7 +30,7 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
     return []
 
 async def handle_direct_reply(bot_instance, message: discord.Message):
-    """Handles a direct reply (via reply or mention) to one of the bot's messages."""
+    """Handles a direct reply (via reply or mention) to one of the bot's messages OR another user's image."""
     
     replied_to_message = None
     if message.reference and message.reference.message_id:
@@ -48,6 +48,7 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         await handle_text_or_image_response(bot_instance, message, is_autonomous=False)
         return
 
+    # --- 1. RELATIONSHIP SCORING ---
     if len(message.content) > 3:
         impact_score = await ai_classifiers.analyze_sentiment_impact(
             bot_instance, message.author.display_name, message.content
@@ -55,26 +56,18 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         if impact_score != 0:
             user_id = str(message.author.id)
             guild_id = str(message.guild.id) if message.guild else None
-            
-            new_score = await bot_instance.firestore_service.update_relationship_score(
-                user_id, guild_id, impact_score
-            )
-            
-            await update_relationship_status(bot_instance, user_id, guild_id, new_score)
-            
-            if impact_score > 0: 
-                logging.info(f"📈 {message.author.display_name} gained {impact_score} pts via Reply. Total: {new_score:.2f}")
-            else: 
-                logging.info(f"📉 {message.author.display_name} lost {impact_score} pts via Reply. Total: {new_score:.2f}")
-                
+            # Fire and forget update
+            asyncio.create_task(bot_instance.firestore_service.update_relationship_score(user_id, guild_id, impact_score))
+
     user_name_to_use = await bot_instance.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
     
+    # --- 2. PREPARE THE PROMPT ---
     context_snippet = ""
     async for msg in message.channel.history(limit=3, before=message):
         if msg.content:
             context_snippet = f"{msg.author.display_name}: {msg.content}\n" + context_snippet
 
-    reply_prompt = (
+    reply_prompt_text = (
         f"{bot_instance.personality_instruction}\n\n"
         f"# --- CONVERSATION CONTEXT ---\n"
         f"You previously said: \"{replied_to_message.content}\"\n"
@@ -82,48 +75,47 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         f"# --- YOUR TASK ---\n"
         f"Based on this direct reply, generate a short, in-character response. Your mood is '{bot_instance.current_mood}'.\n"
         f"CRITICAL RULES:\n"
-        f"1. **DO NOT REPEAT** the user's message back to them. They know what they said.\n"
-        f"2. Respond directly to the **intent**, not the text. Move the conversation forward immediately."
+        f"1. **DO NOT REPEAT** the user's message back to them.\n"
+        f"2. If looking at an image, comment on it specifically.\n"
+        f"3. Respond directly to the **intent**."
     )
 
-    # --- NEW: IMAGE HANDLING ---
-    api_contents = []
+    # --- 3. HANDLE IMAGES (The Eyes) ---
+    api_parts = []
     
-    # 1. Check for image in the REPLIED-TO message (The context)
+    # A. Check for image in the REPLIED-TO message (Context)
     if replied_to_message.attachments:
         for att in replied_to_message.attachments:
             if "image" in att.content_type:
                 try:
                     image_bytes = await att.read()
                     if len(image_bytes) < 8 * 1024 * 1024:
-                        image_part = types.Part.from_bytes(data=image_bytes, mime_type=att.content_type)
-                        api_contents.append(types.Content(role="user", parts=[image_part]))
-                        reply_prompt = f"[SYSTEM: The user is replying to the image attached above.]\n" + reply_prompt
+                        api_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=att.content_type))
+                        reply_prompt_text = "[SYSTEM: The user is replying to the image attached above.]\n" + reply_prompt_text
                         break
                 except Exception as e:
-                    logging.error(f"Failed to attach image context in reply: {e}")
+                    logging.error(f"Failed to attach context image: {e}")
 
-    # 2. Check for image in the CURRENT message (User sends image + text)
+    # B. Check for image in the CURRENT message (User input)
     if message.attachments:
          for att in message.attachments:
             if "image" in att.content_type:
                 try:
                     image_bytes = await att.read()
                     if len(image_bytes) < 8 * 1024 * 1024:
-                        image_part = types.Part.from_bytes(data=image_bytes, mime_type=att.content_type)
-                        api_contents.append(types.Content(role="user", parts=[image_part]))
-                        reply_prompt = f"[SYSTEM: The user sent the image attached above.]\n" + reply_prompt
+                        api_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=att.content_type))
+                        reply_prompt_text = "[SYSTEM: The user sent the image attached above.]\n" + reply_prompt_text
                         break
                 except Exception as e:
-                    logging.error(f"Failed to attach image context in reply: {e}")
+                    logging.error(f"Failed to attach current image: {e}")
 
-    # Add the text prompt last
-    api_contents.append(types.Content(role="user", parts=[types.Part(text=reply_prompt)]))
+    # Add text last
+    api_parts.append(types.Part(text=reply_prompt_text))
 
     try:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME,
-            contents=api_contents,
+            contents=[types.Content(role="user", parts=api_parts)],
             config=bot_instance.GEMINI_TEXT_CONFIG
         )
         
@@ -133,12 +125,11 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
                 for chunk in bot_instance.split_message(cleaned_response):
                     await message.channel.send(chunk.lower())
         else:
-            logging.warning(f"⚠️ Direct reply resulted in empty text. Candidate: {response.candidates[0] if response and response.candidates else 'None'}")
             await message.channel.send("huh? sorry i spaced out for a second.")
             
     except Exception:
         logging.error("Failed to handle direct reply.", exc_info=True)
-        await message.channel.send("my brain just shorted out for a second, what were we talkin about?")
+        await message.channel.send("my brain just shorted out for a second.")
 
 async def handle_text_or_image_response(bot_instance, message: discord.Message, is_autonomous: bool = False, summary: str = ""):
     """Core logic for generating a text response based on chat history."""

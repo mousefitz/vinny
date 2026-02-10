@@ -73,7 +73,6 @@ class VinnyLogic(commands.Cog):
             logging.error(f"Error in command '{ctx.command}':", exc_info=error)
        
         
-
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         bot_names = ["vinny", "vincenzo", "vin vin"]
@@ -85,64 +84,45 @@ class VinnyLogic(commands.Cog):
         
         try:
             # 2. Fix Embeds (Twitter/TikTok links)
-            if await utilities.check_and_fix_embeds(message):
-                return
+            if await utilities.check_and_fix_embeds(message): return
             
             # 3. Clean Content
             cleaned_content = re.sub(f'<@!?{self.bot.user.id}>', '', message.content).strip()
             msg_content_lower = message.content.lower()
 
-            # 4. Check for Corrections ("Wrong", "That's not it")
+            # 4. Check for Corrections
             if await ai_classifiers.is_a_correction(self.bot, message, self.bot.GEMINI_TEXT_CONFIG):
                 return await conversation_tasks.handle_correction(self.bot, message)
             
             # =========================================================================
             # NEW: URL SUMMARIZATION
             # =========================================================================
-            summary_triggers = [
-                "summarize", "summary", "tldr", "tl;dr", "give me the gist", 
-                "what's this about", "break it down"
-            ]
-            
+            summary_triggers = ["summarize", "summary", "tldr", "tl;dr", "give me the gist", "what's this about", "break it down"]
             is_summary_request = any(trigger in msg_content_lower for trigger in summary_triggers)
             is_addressed = "vinny" in msg_content_lower or self.bot.user in message.mentions or (message.reference and message.reference.resolved and message.reference.resolved.author == self.bot.user)
 
             if is_summary_request and is_addressed:
                 target_url = None
-
-                # A. Check message itself
                 urls = URL_PATTERN.findall(message.content)
-                if urls:
-                    target_url = urls[0]
-                
-                # B. Check Reply
+                if urls: target_url = urls[0]
                 elif message.reference and message.reference.resolved:
                     replied_msg = message.reference.resolved
                     replied_urls = URL_PATTERN.findall(replied_msg.content)
-                    if replied_urls:
-                        target_url = replied_urls[0]
-                    # Check embeds in reply
+                    if replied_urls: target_url = replied_urls[0]
                     elif replied_msg.embeds:
                         for embed in replied_msg.embeds:
                             if embed.url:
                                 target_url = embed.url
                                 break
-                
-                # C. Check History (Last 5 msgs)
                 if not target_url:
                     async for past_msg in message.channel.history(limit=5):
                         past_urls = URL_PATTERN.findall(past_msg.content)
                         if past_urls:
                             target_url = past_urls[0]
                             break
-
                 if target_url:
                     async with message.channel.typing():
-                        summary = await conversation_tasks.summarize_url(
-                            self.bot.gemini_client,
-                            self.bot.http_session, 
-                            target_url
-                        )
+                        summary = await conversation_tasks.summarize_url(self.bot.gemini_client, self.bot.http_session, target_url)
                         await message.reply(summary)
                     return 
 
@@ -153,55 +133,71 @@ class VinnyLogic(commands.Cog):
                 try:
                     ref_msg = await message.channel.fetch_message(message.reference.message_id)
                     
-                    # IF REPLYING TO VINNY...
+                    # --- CASE A: REPLYING TO VINNY -----------------------------------
                     if ref_msg.author.id == self.bot.user.id:
                         
-                        # --- A. IMAGE EDIT INTERCEPTOR (The "Shut Up and Paint" Logic) ---
+                        # IMAGE EDIT INTERCEPTOR (The "Shut Up and Paint" Logic)
                         if (ref_msg.attachments or ref_msg.embeds):
-                            trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit"]
+                            trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix"]
                             first_word = cleaned_content.lower().split(' ')[0]
                             
-                            # Check: Is it a forced trigger?
+                            # Check 1: Forced trigger word?
                             is_edit = (first_word in trigger_words)
-                            
-                            # Backup Check: If not forced, ask AI (only if no trigger word found)
+                            # Check 2: Backup AI Check
                             if not is_edit: 
                                 is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
 
                             if is_edit:
-                                logging.info(f"🎨 FORCE EDIT DETECTED: '{cleaned_content}'")
+                                logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
                                 async with message.channel.typing():
-                                    # 1. Try to get prompt from the specific message we are replying to
+                                    
+                                    # --- 1. DOWNLOAD THE SOURCE IMAGE (Integrated Fix) ---
+                                    input_image_bytes = None
+                                    if ref_msg.attachments:
+                                        for att in ref_msg.attachments:
+                                            if "image" in att.content_type:
+                                                input_image_bytes = await att.read()
+                                                break
+                                    elif ref_msg.embeds and ref_msg.embeds[0].image:
+                                        try:
+                                            import aiohttp
+                                            async with aiohttp.ClientSession() as session:
+                                                async with session.get(ref_msg.embeds[0].image.url) as resp:
+                                                    if resp.status == 200: input_image_bytes = await resp.read()
+                                        except Exception as e:
+                                            logging.error(f"Failed to download embed image: {e}")
+
+                                    # --- 2. GET PROMPT ---
                                     previous_prompt = None
-                                    if ref_msg.embeds and ref_msg.embeds[0].footer.text:
-                                        footer_text = ref_msg.embeds[0].footer.text
-                                        if "|" in footer_text:
-                                            # Extract the part before the "|" separator
-                                            previous_prompt = footer_text.split("|")[0].strip()
+                                    if not input_image_bytes:
+                                        if ref_msg.embeds and ref_msg.embeds[0].footer.text:
+                                            footer_text = ref_msg.embeds[0].footer.text
+                                            if "|" in footer_text: previous_prompt = footer_text.split("|")[0].strip()
+                                        if not previous_prompt:
+                                            previous_prompt = self.channel_image_history.get(message.channel.id)
 
-                                    # 2. Fallback to channel history (for old images without footers)
-                                    if not previous_prompt:
-                                        previous_prompt = self.channel_image_history.get(message.channel.id)
-
-                                    final_prompt = await image_tasks.handle_image_request(
-                                        self.bot, message, cleaned_content, previous_prompt
+                                    # --- 3. CALL TASK WITH IMAGE BYTES ---
+                                    await image_tasks.handle_image_request(
+                                        self.bot, 
+                                        message, 
+                                        cleaned_content, 
+                                        previous_prompt=previous_prompt, 
+                                        input_image_bytes=input_image_bytes # <--- This enables Editing
                                     )
-                                    if final_prompt:
-                                        self.channel_image_history[message.channel.id] = final_prompt
                                 return # STOP HERE. Vinny paints and leaves.
 
-                        # --- B. NORMAL CHAT REPLY ---
-                        # If we reached this line, it wasn't an image edit. Treat as normal conversation.
+                        # --- NORMAL CHAT REPLY ---
                         await self.update_vinny_mood()
                         async with message.channel.typing():
                             await conversation_tasks.handle_direct_reply(self.bot, message)
-                        return # STOP HERE. Vinny chats and leaves.
+                        return
                     
-                    # --- C. REPLYING TO OTHERS BUT MENTIONING VINNY (NEW FIX) ---
-                    # If user replies to someone else (e.g. an image) and tags Vinny ("Vinny look at this")
+                    # --- CASE B: REPLYING TO OTHERS + MENTIONING VINNY (Integrated Fix) ---
+                    # e.g. User replies to someone else's image: "Vinny look at this"
                     elif is_addressed:
                         await self.update_vinny_mood()
                         async with message.channel.typing():
+                            # This handles fetching the image from the user's message
                             await conversation_tasks.handle_direct_reply(self.bot, message)
                         return
 
@@ -215,7 +211,7 @@ class VinnyLogic(commands.Cog):
                         return await image_tasks.handle_image_reply(self.bot, message, last_message)
             
             # =========================================================================
-            # 2. AUTONOMOUS & GENERAL CHAT (Mentions / Random)
+            # 2. AUTONOMOUS & GENERAL CHAT
             # =========================================================================
             should_respond, is_autonomous = False, False
             if self.bot.user.mentioned_in(message) or any(name in message.content.lower() for name in bot_names):
@@ -226,11 +222,9 @@ class VinnyLogic(commands.Cog):
                 should_respond = True
 
             if should_respond:
-                # --- 🔥 NEW: LEARN BEFORE YOU ACT ---
-                # We verify the image FIRST so the facts are available for the command immediately.
+                # --- PASSIVE LEARNING ---
                 if self.bot.PASSIVE_LEARNING_ENABLED and message.attachments:
-                    image_bytes = None
-                    mime_type = None
+                    image_bytes, mime_type = None, None
                     for att in message.attachments:
                         if "image" in att.content_type and att.size < 8 * 1024 * 1024:
                             image_bytes = await att.read()
@@ -238,137 +232,77 @@ class VinnyLogic(commands.Cog):
                             break
                     
                     if image_bytes:
-                        # We use 'await' here to ensure DB is updated BEFORE we continue
                         if extracted_facts := await extract_facts_from_message(self.bot, message, author_name=None, image_bytes=image_bytes, mime_type=mime_type):
                             for key, value in extracted_facts.items():
                                 await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
-                                logging.info(f"👁️ Learned visual fact BEFORE replying: {key}={value}")
+                                logging.info(f"👁️ Learned visual fact: {key}={value}")
 
-                # --- NOW DETERMINE INTENT (With the new knowledge!) ---
+                # --- DETERMINE INTENT ---
                 intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
                 async with typing_ctx:
                     if intent == "generate_image":
                         raw_prompt = args.get("prompt", cleaned_content)
-                        
-                        # --- FIX 1: SCRUB THE BOT'S NAME FROM THE PROMPT ---
                         clean_prompt = re.sub(r'\b(vinny|vincenzo|vin|draw|paint|make|generate|please)\b', '', raw_prompt, flags=re.IGNORECASE).strip()
-                        
-                        if len(clean_prompt) < 2: 
-                            clean_prompt = raw_prompt
-
+                        if len(clean_prompt) < 2: clean_prompt = raw_prompt
                         previous_prompt = self.channel_image_history.get(message.channel.id)
                         final_prompt = await image_tasks.handle_image_request(self.bot, message, clean_prompt, previous_prompt)
                         if final_prompt: self.channel_image_history[message.channel.id] = final_prompt
                     
-                    elif intent == "search_google_images": # <--- NEW INTENT HANDLER
+                    elif intent == "search_google_images":
                         search_query = args.get("query") or cleaned_content
-                        
-                        # Scrub common trigger words for a cleaner search
                         search_query = re.sub(r'\b(find|search|look for|picture of|photo of|google)\b', '', search_query, flags=re.IGNORECASE).strip()
-                        
-                        if not search_query:
-                            await message.reply("ya gotta tell me what to look for, pal.")
+                        if not search_query: await message.reply("ya gotta tell me what to look for, pal.")
                         else:
-                            # Calls the function in utils/api_clients.py
-                            results = await api_clients.search_google_images(
-                                self.bot.http_session, 
-                                self.bot.SERPER_API_KEY, 
-                                search_query
-                            )
-                            
+                            results = await api_clients.search_google_images(self.bot.http_session, self.bot.SERPER_API_KEY, search_query)
                             if results:
-                                # Uses the Paginator from cogs/helpers/utilities.py
                                 view = utilities.ImagePaginator(results, search_query, message.author)
                                 await message.reply(embed=view.get_embed(), view=view)
-                            else:
-                                await message.reply("i looked everywhere, nothin'.")
+                            else: await message.reply("i looked everywhere, nothin'.")
 
                     elif intent == "generate_user_portrait": 
-                        # --- MULTI-USER TAGGING LOGIC ---
                         target_str = args.get("target", "me")
                         details = args.get("details", "")
-                        
                         identified_users = []
-                        
-                        # 1. Start with explicit mentions (Highest Confidence)
                         for m in message.mentions:
                             if m not in identified_users: identified_users.append(m)
-
-                        # 2. Parse text for others (Split by "and", "&", "with", ",")
                         clean_str = re.sub(r'<@!?\d+>', '', target_str).lower()
                         potential_names = re.split(r'\s+(?:and|&|,|with)\s+', clean_str)
-
                         for name in potential_names:
                             name = name.strip()
                             if not name: continue
-                            
-                            # --- FIX 2: IGNORE TRIGGER WORDS AS NAMES ---
-                            if name.lower() in ["vinny", "vincenzo", "vin", "draw", "paint", "picture", "of", "please"]:
-                                continue
-
-                            # Handle "Me" / "I"
+                            if name.lower() in ["vinny", "vincenzo", "vin", "draw", "paint", "picture", "of", "please"]: continue
                             if name in ["me", "myself", "i"]:
-                                if message.author not in identified_users: 
-                                    identified_users.append(message.author)
+                                if message.author not in identified_users: identified_users.append(message.author)
                             else:
-                                # Try Text Search in Server
                                 found = discord.utils.find(lambda m: name in m.display_name.lower() or name in m.name.lower(), message.guild.members)
-                                # Try Nickname Lookup
-                                if not found:
-                                     found = await utilities.find_user_by_vinny_name(self.bot, message.guild, name)
-                                
+                                if not found: found = await utilities.find_user_by_vinny_name(self.bot, message.guild, name)
                                 if found:
-                                    # --- FIX 3: IGNORE THE BOT UNLESS REQUESTED ---
                                     if found.id == self.bot.user.id:
-                                        # Only include Vinny if the user specifically said "yourself", "self", "us", or "we"
                                         is_explicit = re.search(r'\b(yourself|self|us|we)\b', message.content.lower())
-                                        if not is_explicit:
-                                            continue 
-
-                                    if found not in identified_users:
-                                        identified_users.append(found)
-
-                        # 3. Fallback
+                                        if not is_explicit: continue 
+                                    if found not in identified_users: identified_users.append(found)
                         if not identified_users:
-                            # If they specifically asked for Vinny ("paint yourself"), add him now manually
-                            if target_str.lower() in ["yourself", "self", "vinny"]:
-                                identified_users.append(self.bot.user)
+                            if target_str.lower() in ["yourself", "self", "vinny"]: identified_users.append(self.bot.user)
                             else:
                                 identified_users.append(message.author)
-                                if target_str.lower() not in ['me', 'myself']:
-                                    await message.channel.send(f"couldn't find '{target_str}', so i'm just paintin' you.")
-
-                        # CALL PORTRAIT FUNCTION WITH LIST
+                                if target_str.lower() not in ['me', 'myself']: await message.channel.send(f"couldn't find '{target_str}', so i'm just paintin' you.")
                         await image_tasks.handle_portrait_request(self.bot, message, identified_users, details)
 
                     elif intent == "get_user_knowledge":
                         target_user_name = args.get("target_user", "")
                         target_user = None
-
-                        # 0. PRIORITY: Check for actual Discord Mentions first
                         valid_mentions = [m for m in message.mentions if m.id != self.bot.user.id]
-                        if valid_mentions:
-                            target_user = valid_mentions[0]
-
-                        # 1. If no mention, check for "me" / "myself" keywords
+                        if valid_mentions: target_user = valid_mentions[0]
                         clean_target = target_user_name.lower().strip()
-                        if not target_user and (not clean_target or clean_target in ["me", "myself", "i", "user", "the user", "self", "my profile"]):
-                            target_user = message.author
-
-                        # 2. If still no user, try searching by name (Text Search)
+                        if not target_user and (not clean_target or clean_target in ["me", "myself", "i", "user", "the user", "self", "my profile"]): target_user = message.author
                         elif not target_user and message.guild:
                             search_name = target_user_name.replace("@", "").strip()
                             target_user = discord.utils.find(lambda m: search_name.lower() in m.display_name.lower(), message.guild.members)
-                            if not target_user:
-                                target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, search_name)
-
-                        # --- EXECUTE REQUEST ---
-                        if target_user:
-                            await conversation_tasks.handle_knowledge_request(self.bot, message, target_user)
-                        else:
-                            await message.channel.send(f"who? i looked all over, couldn't find anyone named '{target_user_name}'.")
+                            if not target_user: target_user = await utilities.find_user_by_vinny_name(self.bot, message.guild, search_name)
+                        if target_user: await conversation_tasks.handle_knowledge_request(self.bot, message, target_user)
+                        else: await message.channel.send(f"who? i looked all over, couldn't find anyone named '{target_user_name}'.")
 
                     elif intent == "tag_user":
                         user_to_tag = args.get("user_to_tag")
@@ -381,23 +315,18 @@ class VinnyLogic(commands.Cog):
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
                     else: 
-                        # Background Sentiment Analysis (MOOD ONLY)
                         async def update_sentiment_background():
                             try:
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
                                 await self.update_mood_based_on_sentiment(user_sentiment)
                                 await self.update_vinny_mood()
-                            except Exception as e:
-                                logging.error(f"Background mood update failed: {e}")
-
+                            except Exception as e: logging.error(f"Background mood update failed: {e}")
                         asyncio.create_task(update_sentiment_background())
                         
                         await conversation_tasks.handle_text_or_image_response(
                             self.bot, message, is_autonomous=is_autonomous, summary=None
                         )
-            
             else:
-                # 8. Random Reactions (When not replying)
                 explicit_reaction_keywords = ["react to this", "add an emoji", "emoji this", "react vinny"]
                 if "pie" in message.content.lower() and random.random() < 0.75: await message.add_reaction('🥧')
                 elif any(keyword in message.content.lower() for keyword in explicit_reaction_keywords) or (random.random() < self.bot.reaction_chance):

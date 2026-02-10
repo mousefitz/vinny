@@ -203,13 +203,11 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             "## CRITICAL INSTRUCTIONS:\n"
             "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested. If they ask for 'Vinny eating a tire', that is the focus.\n"
             "2. **STYLE:** Pick a unique style unless the user requested one.\n"
-            "3. **SYNC:** Your `reply_text` must describe the image you are creating.\n\n"
             f"## User Request:\n\"{image_prompt}\"\n\n"
             "## Your Output:\n"
             "Provide a single JSON object with 3 keys:\n"
             "- \"core_subject\" (Short title, e.g. 'The Pizza King')\n"
             "- \"enhanced_prompt\" (The detailed image generation prompt)\n"
-            "- \"reply_text\" (Your chaotic/flirty response to the user describing what you painted)"
         )
         
         try:
@@ -241,7 +239,6 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             data = json.loads(response.text)
             enhanced_prompt = data.get("enhanced_prompt", image_prompt)
             core_subject = data.get("core_subject", "Artistic Chaos")
-            reply_text = data.get("reply_text", "Here is that image you wanted.") 
 
             # 3. Announce
             thinking_messages = [
@@ -284,7 +281,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 clean_prompt = enhanced_prompt[:1000].replace("\n", " ")
                 embed.set_footer(text=f"{clean_prompt} | Requested by {message.author.display_name}")
                 
-                await message.channel.send(content=reply_text.lower(), file=file, embed=embed)
+                await message.channel.send(file=file, embed=embed)
                 return enhanced_prompt
             
             else:
