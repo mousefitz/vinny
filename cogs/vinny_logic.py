@@ -143,37 +143,25 @@ class VinnyLogic(commands.Cog):
                     if should_check_edit and has_image:
                         trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix", "modify"]
                         
-                        # --- 1. SUPER AGGRESSIVE CLEANING ---
-                        # Removes "Vinny", commas, spaces, and finds the first real word.
-                        # Input: "Vinny, add a milkshake" -> "add a milkshake"
-                        # Input: "add a milkshake" -> "add a milkshake"
-                        clean_lower = cleaned_content.lower()
-                        # Remove bot names
-                        clean_lower = re.sub(r'\b(vinny|vincenzo|vin|bot)\b', '', clean_lower).strip()
-                        # Remove leading punctuation/symbols
+                        # --- 1. SMART TRIGGER DETECTION ---
+                        clean_lower = re.sub(r'\b(vinny|vincenzo|vin|bot)\b', '', cleaned_content.lower()).strip()
                         clean_lower = re.sub(r'^[^a-z0-9]+', '', clean_lower).strip()
-                        
                         first_word = clean_lower.split(' ')[0] if clean_lower else ""
                         
-                        # Check 1: Forced trigger word?
                         is_edit = (first_word in trigger_words)
-                        
-                        # Check 2: Backup AI Check (only if trigger failed)
                         if not is_edit: 
                             try:
                                 is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
-                            except:
-                                is_edit = False
+                            except: is_edit = False
 
                         if is_edit:
-                            logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}' (Trigger: {first_word})")
+                            logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
                             async with message.channel.typing():
                                 
                                 # --- DOWNLOAD SOURCE IMAGE ---
                                 input_image_bytes = None
                                 if ref_msg.attachments:
                                     for att in ref_msg.attachments:
-                                        # Robust check: Content-Type OR valid dimensions
                                         if (att.content_type and "image" in att.content_type) or att.height:
                                             input_image_bytes = await att.read()
                                             break
@@ -183,30 +171,46 @@ class VinnyLogic(commands.Cog):
                                         async with aiohttp.ClientSession() as session:
                                             async with session.get(ref_msg.embeds[0].image.url) as resp:
                                                 if resp.status == 200: input_image_bytes = await resp.read()
-                                    except Exception as e:
-                                        logging.error(f"Failed to download embed image: {e}")
+                                    except Exception: pass
 
-                                # --- GET PROMPT & EXECUTE ---
+                                # --- GET PROMPT ---
                                 previous_prompt = None
-                                
-                                # FIX: ALWAYS try to get the previous prompt, even for edits.
-                                # This ensures we can send "Original Prompt + New Instruction"
                                 if ref_msg.embeds and ref_msg.embeds[0].footer.text:
                                     footer_text = ref_msg.embeds[0].footer.text
-                                    if "|" in footer_text: 
-                                        previous_prompt = footer_text.split("|")[0].strip()
-                                
-                                # Fallback to history if footer failed
+                                    if "|" in footer_text: previous_prompt = footer_text.split("|")[0].strip()
                                 if not previous_prompt:
                                     previous_prompt = self.channel_image_history.get(message.channel.id)
 
-                                await image_tasks.handle_image_request(
-                                    self.bot, 
-                                    message, 
-                                    cleaned_content, 
-                                    previous_prompt=previous_prompt, 
-                                    input_image_bytes=input_image_bytes
-                                )
+                                # --- DECISION: STANDARD EDIT OR PORTRAIT INJECTION? ---
+                                # Check if the user said "me", "myself", "i" OR mentioned someone
+                                is_self_ref = re.search(r'\b(me|myself|i)\b', cleaned_content, re.IGNORECASE)
+                                mentions = [m for m in message.mentions if m.id != self.bot.user.id]
+
+                                # If "Add me" or "Add @User", use the Portrait System
+                                if (is_self_ref or mentions) and "add" in cleaned_content.lower():
+                                    target_users = []
+                                    if is_self_ref: target_users.append(message.author)
+                                    target_users.extend(mentions)
+                                    # Unique list
+                                    target_users = list(set(target_users))
+                                    
+                                    await image_tasks.handle_portrait_request(
+                                        self.bot, 
+                                        message, 
+                                        target_users, 
+                                        details=cleaned_content, # "Add me doing X"
+                                        previous_prompt=previous_prompt,
+                                        input_image_bytes=input_image_bytes
+                                    )
+                                else:
+                                    # Standard Edit (e.g. "Add a milkshake")
+                                    await image_tasks.handle_image_request(
+                                        self.bot, 
+                                        message, 
+                                        cleaned_content, 
+                                        previous_prompt=previous_prompt, 
+                                        input_image_bytes=input_image_bytes
+                                    )
                             return # STOP HERE. Vinny paints and leaves.
 
                     # --- IF NOT AN EDIT, HANDLE AS CHAT ---
