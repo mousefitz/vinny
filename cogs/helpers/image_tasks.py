@@ -42,10 +42,10 @@ def prepare_image_for_api(image_bytes):
         # Fallback to original bytes if Pillow fails
         return image_bytes, 'image/png'
 
-# --- PORTRAIT HANDLER ---
+# --- PORTRAIT HANDLER (Simplified) ---
 async def handle_portrait_request(bot_instance, message, target_users, details="", previous_prompt=None, input_image_bytes=None):
     """
-    Generates an artistic depiction for ONE or MULTIPLE users.
+    Prepares character data for ONE or MULTIPLE users and passes it to the main image handler.
     """
     if not isinstance(target_users, list): target_users = [target_users]
 
@@ -57,7 +57,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         guild_id = None
         server_name = "Private Context"
 
-    logger.info(f"Starting Paint Request for {len(target_users)} users in {server_name}")
+    logger.info(f"Gathering Portrait Data for {len(target_users)} users in {server_name}")
 
     try:
         # 2. GATHER DATA
@@ -92,11 +92,9 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                     if 'gender' in clean_key: 
                         gender_fact = clean_value.title()
                     elif any(k in clean_key for k in PET_KEYWORDS): 
-                        # Keep key for pets too (e.g. "Pet: Dog")
                         pet_facts.append(f"{clean_value}") 
                     elif any(k in clean_key for k in appearance_keywords): 
-                        # --- THE FIX IS HERE ---
-                        # We now send "Skin: Tan" instead of just "Tan"
+                        # Preserve Key for specific features
                         appearance_facts.append(f"{clean_key}: {clean_value}")
                     else: 
                         other_facts.append(clean_value)
@@ -104,54 +102,44 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             # Construct Visual String
             visuals_block = []
             if gender_fact and "unknown" not in gender_fact.lower(): visuals_block.append(gender_fact)
-            
-            if appearance_facts: 
-                visuals_block.extend(appearance_facts)
-            else: 
-                visuals_block.append("person")
+            if appearance_facts: visuals_block.extend(appearance_facts)
+            else: visuals_block.append("person")
             
             visual_string = ", ".join(visuals_block)
 
-            # === FORMATTING FOR MODES ===
+            # === FORMATTING ===
             if input_image_bytes:
-                # EDIT MODE
-                # "a Male, Skin: Dark, Hair: Black"
+                # EDIT MODE: Raw visuals for insertion
                 desc = f"a {visual_string}"
                 if pet_facts and is_pet_requested:
                     desc += f" accompanied by their {', '.join(pet_facts)}"
                 character_definitions.append(desc)
-
             else:
-                # GENERATION MODE
+                # GEN MODE: Tags for Art Director
                 char_str = f"SUBJECT {i} ({user.display_name}): [[VISUALS: {visual_string}]] "
-                
-                if pet_facts and is_pet_requested: 
-                    char_str += f"[[MANDATORY PETS: {', '.join(pet_facts)}]] "
-                elif pet_facts: 
-                    other_facts.extend(pet_facts)
+                if pet_facts and is_pet_requested: char_str += f"[[MANDATORY PETS: {', '.join(pet_facts)}]] "
+                elif pet_facts: other_facts.extend(pet_facts)
                 
                 if other_facts:
                     random.shuffle(other_facts)
                     char_str += f"[[TRIVIA: {', '.join(other_facts[:6])}]]"
                 else:
                     char_str += "[[TRIVIA: Unknown]]"
-                
                 character_definitions.append(char_str)
 
-        # 3. CONSTRUCT PROMPT
+        # 3. CONSTRUCT PASS-THROUGH PROMPT
         final_prompt_text = ""
         
-        # === MODE A: EDITING ===
+        # === MODE A: EDITING (Pass raw data to main handler) ===
         if input_image_bytes:
             chars_desc = " and ".join(character_definitions)
+            # We just frame the request here. The main handler will rewrite it cohesively.
             final_prompt_text = f"Add {chars_desc} into the scene. {details}"
-            logger.info(f"EDIT PROMPT GENERATED: {final_prompt_text}")
 
-        # === MODE B: NEW GENERATION ===
+        # === MODE B: NEW GENERATION (Use Art Director) ===
         else:
             user_request = f"USER REQUEST: {details}" if details else ""
             source_data = "\n".join(character_definitions)
-
             director_instruction = (
                 "You are an expert AI Art Director.\n"
                 f"**INPUT DATA:**\n{source_data}\n{user_request}\n\n"
@@ -160,37 +148,38 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 "2. **ACTION:** Make them engage with the scene based on [[TRIVIA]] or the USER REQUEST.\n"
                 "**OUTPUT:** Provide ONLY the final image prompt text."
             )
-
             style_response = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME,
                 contents=[director_instruction]
             )
             final_prompt_text = style_response.text.strip() if style_response and style_response.text else source_data
-            logger.info(f"GENERATED DETAILED PROMPT: {final_prompt_text}")
 
-        # 4. EXECUTE 
+        logger.info(f"Passing prompt to main handler: {final_prompt_text[:100]}...")
+
+        # 4. EXECUTE (Pass to central funnel)
         await handle_image_request(
             bot_instance, 
             message, 
             final_prompt_text, 
-            previous_prompt=previous_prompt, 
+            previous_prompt=previous_prompt, # Pass context along
             input_image_bytes=input_image_bytes
         )
 
     except Exception as e:
-        logger.error(f"Portrait Request Failed: {e}", exc_info=True)
-        await message.channel.send("i tried to paint ya, but i tripped.")
+        logger.error(f"Portrait Gathering Failed: {e}", exc_info=True)
+        await message.channel.send("i tried to gather the data, but i tripped.")
               
 async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None, input_image_bytes=None):
     """
-    Generates or Edits an image using Gemini/Fal.ai.
+    Generates OR Edits an image using Gemini (for prompt engineering) and Fal.ai (for rendering).
+    This is the central funnel for all image operations.
     """
     async with message.channel.typing():
         # --- 0. CHECK FOR EDIT MODE ---
         is_edit_mode = (input_image_bytes is not None)
         
         # ==================================================================================
-        # PATH A: EDIT MODE (Flux 2 Flash Edit)
+        # PATH A: EDIT MODE (Flux 2 Flash Edit with Smart Rewrite)
         # ==================================================================================
         if is_edit_mode:
             try:
@@ -203,28 +192,56 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                     img_str = base64.b64encode(buff.getvalue()).decode("utf-8")
                     image_url = f"data:image/png;base64,{img_str}"
 
-                # 2. MERGE PROMPTS (PRIORITY FIX)
-                # We put the NEW instruction first so the AI prioritizes it.
+                # 2. SMART PROMPT MERGING (The Fix for ALL Edits)
+                enhanced_prompt = ""
                 if previous_prompt:
-                    enhanced_prompt = f"{image_prompt}. (Context: {previous_prompt})"
+                    # If we have context, use Gemini to rewrite everything into one cohesive paragraph.
+                    await message.channel.send(random.choice(["rewriting the scene...", "blending adjustments...", "thinking how to fit that in..."]))
+                    
+                    rewriter_prompt = (
+                        "You are an expert AI Prompt Engineer responsible for editing images.\n"
+                        f"**ORIGINAL SCENE CONTEXT:** {previous_prompt}\n\n"
+                        f"**USER MODIFICATION REQUEST:** {image_prompt}\n\n"
+                        "**TASK:** Rewrite the prompt into a SINGLE cohesive paragraph that integrates the User Modification naturally into the Original Scene.\n"
+                        "**RULES:**\n"
+                        "1. **PRECISION:** Execute the modification exactly as requested.\n"
+                        "2. **FLOW:** Do not simply append the request. Blend it so lighting, style, and perspective match the original description.\n"
+                        "3. **OUTPUT:** Return ONLY the new rewritten prompt text."
+                    )
+                    
+                    try:
+                        rewrite_response = await bot_instance.make_tracked_api_call(
+                            model=bot_instance.MODEL_NAME,
+                            contents=[rewriter_prompt],
+                             config=types.GenerateContentConfig(temperature=0.7)
+                        )
+                        if rewrite_response and rewrite_response.text:
+                            enhanced_prompt = rewrite_response.text.strip()
+                            logger.info(f"Gemini successfully rewrote edit prompt: {enhanced_prompt[:100]}...")
+                        else:
+                             raise Exception("Gemini rewrite returned empty response")
+                    except Exception as e:
+                        logger.warning(f"Gemini rewrite failed, falling back to crude append: {e}")
+                        # Fallback: Put new instruction first for priority
+                        enhanced_prompt = f"{image_prompt}. (Context: {previous_prompt})"
                 else:
+                    # Raw upload with no previous context string
                     enhanced_prompt = image_prompt
                 
-                # 3. Announce
+                # 3. Announce Execution
                 await message.channel.send(random.choice([
-                    "adding the details...", "fixing it up...", 
                     "applying the changes...", "painting over it...", 
-                    "remixing the canvas..."
+                    "remixing the canvas...", "finalizing the details..."
                 ]))
 
                 # 4. Call Fal.ai Flash Edit
-                logging.info(f"🎨 Fal.ai FLASH EDIT: '{enhanced_prompt}'")
+                logger.info(f"🎨 Fal.ai FLASH EDIT submitting: '{enhanced_prompt[:100]}...'")
                 handler = await fal_client.submit_async(
                     "fal-ai/flux-2/flash/edit", 
                     arguments={
                         "prompt": enhanced_prompt,
                         "image_urls": [image_url],
-                        "strength": 0.90, # Boosted from 0.85 to force changes
+                        "strength": 0.92, # High strength to force structural changes based on the new prompt
                         "guidance_scale": 3.5,
                         "num_inference_steps": 8,
                         "enable_safety_checker": False,
@@ -260,7 +277,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                     return None
 
             except Exception as e:
-                logging.error(f"Edit failed: {e}")
+                logger.error(f"Edit failed: {e}", exc_info=True)
                 await message.channel.send("my brain's fried. i can't edit right now.")
                 return None
 
@@ -285,7 +302,6 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested. If they ask for 'Vinny eating a tire', that is the focus.\n"
                 "2. **STYLE:** Pick a unique style unless the user requested one.\n"
                 "3. **COMPOSITION:** Use dynamic angles. No boring passport photos.\n"
-                "4. **ART STYLE:** Choose a unique art style.\n\n"
                 f"## User Request:\n\"{image_prompt}\"\n\n"
                 "## Your Output:\n"
                 "Provide a single JSON object with 3 keys:\n"
@@ -372,10 +388,10 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                     return None
                 
             except Exception as e:
-                logging.error(f"Image generation failed: {e}")
+                logger.error(f"Image generation failed: {e}")
                 await message.channel.send("my brain's fried. i can't paint right now.")
                 return None
-
+            
 # --- 3. IMAGE REPLIES (Comments) ---
 
 async def handle_image_reply(bot_instance, reply_message: discord.Message, original_message: discord.Message):
