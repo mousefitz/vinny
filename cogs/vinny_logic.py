@@ -134,25 +134,42 @@ class VinnyLogic(commands.Cog):
                     ref_msg = await message.channel.fetch_message(message.reference.message_id)
                     
                     # --- GLOBAL CHECK: IS THIS AN IMAGE EDIT REQUEST? ---
-                    # Works for replies to Vinny OR replies to others (if Vinny is tagged)
                     is_reply_to_vinny = (ref_msg.author.id == self.bot.user.id)
                     should_check_edit = is_reply_to_vinny or is_addressed
                     
-                    if should_check_edit and (ref_msg.attachments or ref_msg.embeds):
-                        trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix"]
-                        first_word = cleaned_content.lower().split(' ')[0]
+                    # Check if there is an image to edit (Attachment or Embed)
+                    has_image = (ref_msg.attachments or ref_msg.embeds)
+                    
+                    if should_check_edit and has_image:
+                        trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix", "modify"]
+                        
+                        # --- 1. SUPER AGGRESSIVE CLEANING ---
+                        # Removes "Vinny", commas, spaces, and finds the first real word.
+                        # Input: "Vinny, add a milkshake" -> "add a milkshake"
+                        # Input: "add a milkshake" -> "add a milkshake"
+                        clean_lower = cleaned_content.lower()
+                        # Remove bot names
+                        clean_lower = re.sub(r'\b(vinny|vincenzo|vin|bot)\b', '', clean_lower).strip()
+                        # Remove leading punctuation/symbols
+                        clean_lower = re.sub(r'^[^a-z0-9]+', '', clean_lower).strip()
+                        
+                        first_word = clean_lower.split(' ')[0] if clean_lower else ""
                         
                         # Check 1: Forced trigger word?
                         is_edit = (first_word in trigger_words)
-                        # Check 2: Backup AI Check (only if not obvious)
+                        
+                        # Check 2: Backup AI Check (only if trigger failed)
                         if not is_edit: 
-                            is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
+                            try:
+                                is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
+                            except:
+                                is_edit = False
 
                         if is_edit:
-                            logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
+                            logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}' (Trigger: {first_word})")
                             async with message.channel.typing():
                                 
-                                # --- DOWNLOAD THE SOURCE IMAGE ---
+                                # --- DOWNLOAD SOURCE IMAGE ---
                                 input_image_bytes = None
                                 if ref_msg.attachments:
                                     for att in ref_msg.attachments:
@@ -172,7 +189,6 @@ class VinnyLogic(commands.Cog):
                                 # --- GET PROMPT & EXECUTE ---
                                 previous_prompt = None
                                 if not input_image_bytes:
-                                    # Fallback for generating NEW images based on old prompts
                                     if ref_msg.embeds and ref_msg.embeds[0].footer.text:
                                         footer_text = ref_msg.embeds[0].footer.text
                                         if "|" in footer_text: previous_prompt = footer_text.split("|")[0].strip()
