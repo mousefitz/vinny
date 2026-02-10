@@ -188,12 +188,17 @@ class VinnyLogic(commands.Cog):
 
                                 # --- GET PROMPT & EXECUTE ---
                                 previous_prompt = None
-                                if not input_image_bytes:
-                                    if ref_msg.embeds and ref_msg.embeds[0].footer.text:
-                                        footer_text = ref_msg.embeds[0].footer.text
-                                        if "|" in footer_text: previous_prompt = footer_text.split("|")[0].strip()
-                                    if not previous_prompt:
-                                        previous_prompt = self.channel_image_history.get(message.channel.id)
+                                
+                                # FIX: ALWAYS try to get the previous prompt, even for edits.
+                                # This ensures we can send "Original Prompt + New Instruction"
+                                if ref_msg.embeds and ref_msg.embeds[0].footer.text:
+                                    footer_text = ref_msg.embeds[0].footer.text
+                                    if "|" in footer_text: 
+                                        previous_prompt = footer_text.split("|")[0].strip()
+                                
+                                # Fallback to history if footer failed
+                                if not previous_prompt:
+                                    previous_prompt = self.channel_image_history.get(message.channel.id)
 
                                 await image_tasks.handle_image_request(
                                     self.bot, 

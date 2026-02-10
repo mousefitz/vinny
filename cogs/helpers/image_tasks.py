@@ -5,6 +5,8 @@ import discord
 import random
 import io
 import datetime
+import base64
+import fal_client
 from PIL import Image  # <--- NEW IMPORT
 from google.genai import types
 from utils import api_clients
@@ -182,104 +184,193 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
               
 # --- 2. GENERIC IMAGE REQUESTS (Rewriter & Generator) ---
 
-async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None):
+import re
+import json
+import logging
+import discord
+import random
+import io
+import datetime
+import base64
+import fal_client
+from PIL import Image
+from google.genai import types
+from utils import api_clients
+
+# Setup Logger
+logger = logging.getLogger(__name__)
+
+async def handle_image_request(bot_instance, message: discord.Message, image_prompt: str, previous_prompt=None, input_image_bytes=None):
     """
-    Generates an image using Gemini to rewrite the prompt.
+    Generates or Edits an image using Gemini/Fal.ai.
     """
     async with message.channel.typing():
-        # 1. Rewriter Instruction
-        context_block = ""
-        if previous_prompt:
-            context_block = (
-                f"\n## HISTORY (OLD GARBAGE - IGNORE MOST OF THE TIME):\n"
-                f"The previous image was: \"{previous_prompt}\".\n"
-                f"**STRICT RULE:** Only use this history if the User Request contains EDIT keywords.\n"
-                f"**OTHERWISE: THROW THIS HISTORY AWAY AND START FRESH.**\n"
-            )
-
-        prompt_rewriter_instruction = (
-            "You are an AI Art Director. Refine the user's request into an image prompt.\n\n"
-            f"{context_block}\n"
-            "## CRITICAL INSTRUCTIONS:\n"
-            "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested. If they ask for 'Vinny eating a tire', that is the focus.\n"
-            "2. **STYLE:** Pick a unique style unless the user requested one.\n"
-            f"## User Request:\n\"{image_prompt}\"\n\n"
-            "## Your Output:\n"
-            "Provide a single JSON object with 3 keys:\n"
-            "- \"core_subject\" (Short title, e.g. 'The Pizza King')\n"
-            "- \"enhanced_prompt\" (The detailed image generation prompt)\n"
-        )
+        # --- 0. SETUP EDIT MODE ---
+        is_edit_mode = (input_image_bytes is not None)
+        image_url = None
         
-        try:
-            # 2. Generate Enhanced Prompt
-            safety_settings_off = [
-                types.SafetySetting(category=cat, threshold="OFF")
-                for cat in [
-                    types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                    types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                ]
-            ]
-            
-            response = await bot_instance.make_tracked_api_call(
-                model=bot_instance.MODEL_NAME,
-                contents=[prompt_rewriter_instruction],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.7, 
-                    safety_settings=safety_settings_off
-                )
-            )
-            
-            if not response or not response.text:
-                await message.channel.send("my muse is on vacation. try again.")
+        if is_edit_mode:
+            try:
+                # Prepare image for API (Resize to 1MP max)
+                with Image.open(io.BytesIO(input_image_bytes)) as img:
+                    if img.mode != 'RGB': img = img.convert('RGB')
+                    
+                    # FORCE 1 MEGAPIXEL LIMIT (1024x1024)
+                    if max(img.width, img.height) > 1024: 
+                        img.thumbnail((1024, 1024))
+                        
+                    buff = io.BytesIO()
+                    img.save(buff, format="PNG")
+                    img_str = base64.b64encode(buff.getvalue()).decode("utf-8")
+                    image_url = f"data:image/png;base64,{img_str}"
+                
+                # Merge prompts for context
+                if previous_prompt:
+                    enhanced_prompt = f"{previous_prompt}. {image_prompt}"
+                else:
+                    enhanced_prompt = image_prompt
+                
+                core_subject = "Image Edit"
+                
+            except Exception as e:
+                logging.error(f"Edit Prep Failed: {e}")
+                await message.channel.send("i can't see the picture clearly. it's all garbled.")
                 return None
 
-            data = json.loads(response.text)
-            enhanced_prompt = data.get("enhanced_prompt", image_prompt)
-            core_subject = data.get("core_subject", "Artistic Chaos")
+        # --- 1. REWRITER (Only run if NOT editing) ---
+        elif not is_edit_mode:
+            context_block = ""
+            if previous_prompt:
+                context_block = (
+                    f"\n## HISTORY (OLD GARBAGE - IGNORE MOST OF THE TIME):\n"
+                    f"The previous image was: \"{previous_prompt}\".\n"
+                    f"**STRICT RULE:** Only use this history if the User Request contains EDIT keywords.\n"
+                    f"**OTHERWISE: THROW THIS HISTORY AWAY AND START FRESH.**\n"
+                )
 
-            # 3. Announce
-            thinking_messages = [
-                "aight, gimme a sec. i gotta find my brushes.",
-                "oh i got a vision. hold on.",
-                "mixing the paints... don't rush me.",
-                "lemme see what i can do. stand back.",
-                "hold on, let me finish this slice of pizza first.",
-                "patience. art takes time, unlike your attention span.",
-                "i'm on it. this is gonna be messy.",
-                "loading the canvas... aka grabbing a napkin.",
-                "got it. preparing the masterpiece.",
-                "mixing the paints... let's see what happens.",
-                "wiping the canvas... startin' fresh.",
-                "i got a wild idea for this one.",
-                "loading the canvas...",
-            ]
-            
-            await message.channel.send(random.choice(thinking_messages))
-
-            # 4. Generate the Image
-            image_obj, count = await api_clients.generate_image_with_genai(
-                bot_instance.FAL_KEY,
-                enhanced_prompt,
-                model="fal-ai/flux-2/flash" 
+            prompt_rewriter_instruction = (
+                "You are an AI Art Director. Refine the user's request into an image prompt.\n\n"
+                f"{context_block}\n"
+                "## CRITICAL INSTRUCTIONS:\n"
+                "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested. If they ask for 'Vinny eating a tire', that is the focus.\n"
+                "2. **STYLE:** Pick a unique style unless the user requested one.\n"
+                f"## User Request:\n\"{image_prompt}\"\n\n"
+                "## Your Output:\n"
+                "Provide a single JSON object with 3 keys:\n"
+                "- \"core_subject\" (Short title, e.g. 'The Pizza King')\n"
+                "- \"enhanced_prompt\" (The detailed image generation prompt)\n"
             )
+            
+            try:
+                safety_settings_off = [
+                    types.SafetySetting(category=cat, threshold="OFF")
+                    for cat in [
+                        types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                        types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                        types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                        types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                    ]
+                ]
+                
+                response = await bot_instance.make_tracked_api_call(
+                    model=bot_instance.MODEL_NAME,
+                    contents=[prompt_rewriter_instruction],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        temperature=0.7, 
+                        safety_settings=safety_settings_off
+                    )
+                )
+                
+                if not response or not response.text:
+                    await message.channel.send("my muse is on vacation. try again.")
+                    return None
 
+                data = json.loads(response.text)
+                enhanced_prompt = data.get("enhanced_prompt", image_prompt)
+                core_subject = data.get("core_subject", "Artistic Chaos")
+
+            except Exception:
+                enhanced_prompt = image_prompt
+                core_subject = "Artistic Chaos"
+
+        # --- 2. ANNOUNCE ---
+        thinking_messages = [
+            "aight, gimme a sec. i gotta find my brushes.",
+            "oh i got a vision. hold on.",
+            "mixing the paints... don't rush me.",
+            "lemme see what i can do. stand back.",
+            "hold on, let me finish this slice of pizza first.",
+            "patience. art takes time, unlike your attention span.",
+            "i'm on it. this is gonna be messy.",
+            "loading the canvas... aka grabbing a napkin.",
+            "got it. preparing the masterpiece.",
+            "mixing the paints... let's see what happens.",
+            "wiping the canvas... startin' fresh.",
+            "i got a wild idea for this one.",
+            "loading the canvas...",
+        ]
+        
+        await message.channel.send(random.choice(thinking_messages))
+
+        # --- 3. GENERATE OR EDIT (The Switch) ---
+        try:
+            if is_edit_mode:
+                # --- EDIT PATH (Cheaper Flash Model) ---
+                logging.info(f"🎨 Fal.ai FLASH EDIT: '{enhanced_prompt}'")
+                handler = await fal_client.submit_async(
+                    "fal-ai/flux-2/flash/edit", 
+                    arguments={
+                        "prompt": enhanced_prompt,
+                        "image_urls": [image_url],
+                        "strength": 0.85,
+                        "guidance_scale": 3.5,
+                        "num_inference_steps": 8,
+                        "enable_safety_checker": False,
+                        "num_images": 1  # <--- EXPLICITLY SET TO 1
+                    }
+                )
+                result = await handler.get()
+                
+                if result and "images" in result and len(result["images"]) > 0:
+                    generated_url = result["images"][0]["url"]
+                    import aiohttp
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(generated_url) as resp:
+                            if resp.status == 200:
+                                image_obj = io.BytesIO(await resp.read())
+                    count = 1
+                else:
+                    image_obj = None
+                    count = 0
+
+            else:
+                # --- GEN PATH (Your Original) ---
+                image_obj, count = await api_clients.generate_image_with_genai(
+                    bot_instance.FAL_KEY,
+                    enhanced_prompt,
+                    model="fal-ai/flux-2/flash" 
+                )
+
+            # --- 4. SEND RESULT ---
             if image_obj and count > 0:
                 try:
-                    cost = api_clients.calculate_cost("fal-ai/flux-2/flash", "image", count=count)
+                    # Cost tracking: Flash Edit is ~0.01 (1MP In + 1MP Out)
+                    cost = 0.01 if is_edit_mode else 0.005 
                     today = datetime.datetime.now().strftime("%Y-%m-%d")
                     await bot_instance.firestore_service.update_usage_stats(today, {"images": count, "cost": cost})
                 except Exception: pass
                 
                 file = discord.File(image_obj, filename="vinny_art.png")
                 
-                # Create the Embed
                 embed = discord.Embed(title=f"🎨 {core_subject.title()}", color=discord.Color.dark_teal())
                 embed.set_image(url="attachment://vinny_art.png")
+                
                 clean_prompt = enhanced_prompt[:1000].replace("\n", " ")
-                embed.set_footer(text=f"{clean_prompt} | Requested by {message.author.display_name}")
+                footer_text = f"{clean_prompt} | Requested by {message.author.display_name}"
+                if is_edit_mode: footer_text += " (Edit)"
+                
+                embed.set_footer(text=footer_text)
                 
                 await message.channel.send(file=file, embed=embed)
                 return enhanced_prompt
@@ -287,7 +378,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
             else:
                 await message.channel.send("i spilled the paint. something went wrong.")
                 return None
-            
+        
         except Exception as e:
             logging.error(f"Image generation failed: {e}")
             await message.channel.send("my brain's fried. i can't paint right now.")
