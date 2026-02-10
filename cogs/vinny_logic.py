@@ -133,71 +133,65 @@ class VinnyLogic(commands.Cog):
                 try:
                     ref_msg = await message.channel.fetch_message(message.reference.message_id)
                     
-                    # --- CASE A: REPLYING TO VINNY -----------------------------------
-                    if ref_msg.author.id == self.bot.user.id:
-                        
-                        # IMAGE EDIT INTERCEPTOR (The "Shut Up and Paint" Logic)
-                        if (ref_msg.attachments or ref_msg.embeds):
-                            trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix"]
-                            first_word = cleaned_content.lower().split(' ')[0]
-                            
-                            # Check 1: Forced trigger word?
-                            is_edit = (first_word in trigger_words)
-                            # Check 2: Backup AI Check
-                            if not is_edit: 
-                                is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
-
-                            if is_edit:
-                                logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
-                                async with message.channel.typing():
-                                    
-                                    # --- 1. DOWNLOAD THE SOURCE IMAGE (Integrated Fix) ---
-                                    input_image_bytes = None
-                                    if ref_msg.attachments:
-                                        for att in ref_msg.attachments:
-                                            if "image" in att.content_type:
-                                                input_image_bytes = await att.read()
-                                                break
-                                    elif ref_msg.embeds and ref_msg.embeds[0].image:
-                                        try:
-                                            import aiohttp
-                                            async with aiohttp.ClientSession() as session:
-                                                async with session.get(ref_msg.embeds[0].image.url) as resp:
-                                                    if resp.status == 200: input_image_bytes = await resp.read()
-                                        except Exception as e:
-                                            logging.error(f"Failed to download embed image: {e}")
-
-                                    # --- 2. GET PROMPT ---
-                                    previous_prompt = None
-                                    if not input_image_bytes:
-                                        if ref_msg.embeds and ref_msg.embeds[0].footer.text:
-                                            footer_text = ref_msg.embeds[0].footer.text
-                                            if "|" in footer_text: previous_prompt = footer_text.split("|")[0].strip()
-                                        if not previous_prompt:
-                                            previous_prompt = self.channel_image_history.get(message.channel.id)
-
-                                    # --- 3. CALL TASK WITH IMAGE BYTES ---
-                                    await image_tasks.handle_image_request(
-                                        self.bot, 
-                                        message, 
-                                        cleaned_content, 
-                                        previous_prompt=previous_prompt, 
-                                        input_image_bytes=input_image_bytes # <--- This enables Editing
-                                    )
-                                return # STOP HERE. Vinny paints and leaves.
-
-                        # --- NORMAL CHAT REPLY ---
-                        await self.update_vinny_mood()
-                        async with message.channel.typing():
-                            await conversation_tasks.handle_direct_reply(self.bot, message)
-                        return
+                    # --- GLOBAL CHECK: IS THIS AN IMAGE EDIT REQUEST? ---
+                    # Works for replies to Vinny OR replies to others (if Vinny is tagged)
+                    is_reply_to_vinny = (ref_msg.author.id == self.bot.user.id)
+                    should_check_edit = is_reply_to_vinny or is_addressed
                     
-                    # --- CASE B: REPLYING TO OTHERS + MENTIONING VINNY (Integrated Fix) ---
-                    # e.g. User replies to someone else's image: "Vinny look at this"
-                    elif is_addressed:
+                    if should_check_edit and (ref_msg.attachments or ref_msg.embeds):
+                        trigger_words = ["make", "add", "change", "remove", "put", "give", "draw", "paint", "turn", "edit", "fix", "remix"]
+                        first_word = cleaned_content.lower().split(' ')[0]
+                        
+                        # Check 1: Forced trigger word?
+                        is_edit = (first_word in trigger_words)
+                        # Check 2: Backup AI Check (only if not obvious)
+                        if not is_edit: 
+                            is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
+
+                        if is_edit:
+                            logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
+                            async with message.channel.typing():
+                                
+                                # --- DOWNLOAD THE SOURCE IMAGE ---
+                                input_image_bytes = None
+                                if ref_msg.attachments:
+                                    for att in ref_msg.attachments:
+                                        # Robust check: Content-Type OR valid dimensions
+                                        if (att.content_type and "image" in att.content_type) or att.height:
+                                            input_image_bytes = await att.read()
+                                            break
+                                elif ref_msg.embeds and ref_msg.embeds[0].image:
+                                    try:
+                                        import aiohttp
+                                        async with aiohttp.ClientSession() as session:
+                                            async with session.get(ref_msg.embeds[0].image.url) as resp:
+                                                if resp.status == 200: input_image_bytes = await resp.read()
+                                    except Exception as e:
+                                        logging.error(f"Failed to download embed image: {e}")
+
+                                # --- GET PROMPT & EXECUTE ---
+                                previous_prompt = None
+                                if not input_image_bytes:
+                                    # Fallback for generating NEW images based on old prompts
+                                    if ref_msg.embeds and ref_msg.embeds[0].footer.text:
+                                        footer_text = ref_msg.embeds[0].footer.text
+                                        if "|" in footer_text: previous_prompt = footer_text.split("|")[0].strip()
+                                    if not previous_prompt:
+                                        previous_prompt = self.channel_image_history.get(message.channel.id)
+
+                                await image_tasks.handle_image_request(
+                                    self.bot, 
+                                    message, 
+                                    cleaned_content, 
+                                    previous_prompt=previous_prompt, 
+                                    input_image_bytes=input_image_bytes
+                                )
+                            return # STOP HERE. Vinny paints and leaves.
+
+                    # --- IF NOT AN EDIT, HANDLE AS CHAT ---
+                    if is_reply_to_vinny or is_addressed:
                         await self.update_vinny_mood()
                         async with message.channel.typing():
-                            # This handles fetching the image from the user's message
                             await conversation_tasks.handle_direct_reply(self.bot, message)
                         return
 
@@ -239,6 +233,9 @@ class VinnyLogic(commands.Cog):
 
                 # --- DETERMINE INTENT ---
                 intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
+                if message.attachments and intent == "tag_user":
+                    logging.info("🖼️ Image detected: Overriding 'tag_user' intent to 'respond_to_image'.")
+                    intent = None
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
                 async with typing_ctx:
