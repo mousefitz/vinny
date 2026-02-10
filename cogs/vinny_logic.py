@@ -142,27 +142,22 @@ class VinnyLogic(commands.Cog):
                     
                     if should_check_edit and has_image:
                         # --- 1. STRICT COMMAND TRIGGERS ---
-                        # Only words that are 100% commands.
-                        # We removed "make", "put", "give" because they are too conversational.
                         trigger_words = ["add", "change", "remove", "draw", "paint", "edit", "fix", "remix", "modify", "crop", "resize"]
                         
-                        # Clean the message to find the first real word
                         clean_lower = re.sub(r'\b(vinny|vincenzo|vin|bot)\b', '', cleaned_content.lower()).strip()
-                        clean_lower = re.sub(r'^[^a-z0-9]+', '', clean_lower).strip() # Remove emojis/symbols
+                        clean_lower = re.sub(r'^[^a-z0-9]+', '', clean_lower).strip()
                         first_word = clean_lower.split(' ')[0] if clean_lower else ""
                         
-                        # CHECK 1: Is it a forced command?
+                        # CHECK 1: Forced command?
                         is_edit = (first_word in trigger_words)
                         
-                        # CHECK 2: If not a command, ask the AI (The "Smart" Check)
-                        # The AI will see "Ewww" and return FALSE because of the rules we added.
+                        # CHECK 2: AI Judge?
                         if not is_edit: 
                             try:
                                 is_edit = await ai_classifiers.is_image_edit_request(self.bot, cleaned_content)
-                            except: 
-                                is_edit = False
+                            except: is_edit = False
 
-                        # --- EXECUTE EDIT (Only if TRUE) ---
+                        # --- EXECUTE EDIT ---
                         if is_edit:
                             logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
                             async with message.channel.typing():
@@ -191,16 +186,18 @@ class VinnyLogic(commands.Cog):
                                     previous_prompt = self.channel_image_history.get(message.channel.id)
 
                                 # --- DECISION: STANDARD EDIT OR PORTRAIT INJECTION? ---
-                                is_self_ref = re.search(r'\b(me|myself|i)\b', cleaned_content, re.IGNORECASE)
+                                # THE FIX IS HERE: Added '|my' to the regex so "my cats" triggers lookup.
+                                is_self_ref = re.search(r'\b(me|myself|i|my)\b', cleaned_content, re.IGNORECASE)
                                 mentions = [m for m in message.mentions if m.id != self.bot.user.id]
 
-                                # If "Add me" or "Add @User", use the Portrait System
+                                # If "Add me/my X" or "Add @User", use the Portrait System
                                 if (is_self_ref or mentions) and "add" in cleaned_content.lower():
                                     target_users = []
                                     if is_self_ref: target_users.append(message.author)
                                     target_users.extend(mentions)
                                     target_users = list(set(target_users)) 
                                     
+                                    # Routes to the function that looks up pets/appearance
                                     await image_tasks.handle_portrait_request(
                                         self.bot, 
                                         message, 
