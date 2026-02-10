@@ -64,7 +64,6 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
         character_definitions = []
         appearance_keywords = ['hair', 'eyes', 'style', 'wearing', 'build', 'height', 'look', 'face', 'skin', 'beard', 'glasses', 'tattoo', 'piercing', 'scar', 'clothes', 'clothing', 'hat', 'mask', 'gender']
         PET_KEYWORDS = ['pet', 'dog', 'cat', 'bird', 'animal', 'horse', 'breed']
-        # Check if user explicitly asked for the pet in the message
         is_pet_requested = any(word in details.lower() for word in PET_KEYWORDS)
         
         for i, user in enumerate(target_users, 1):
@@ -76,10 +75,8 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
             # Self-Portrait Override
             if user.id == bot_instance.user.id:
                 base_desc = "Robust middle-aged Italian-American man, long dark hair, messy beard, worn leather jacket"
-                if input_image_bytes: 
-                    character_definitions.append(base_desc)
-                else:
-                    character_definitions.append(f"SUBJECT {i} (Vinny): [[VISUALS: {base_desc}]] [[TRIVIA: Chaos, Pizza]]")
+                if input_image_bytes: character_definitions.append(base_desc)
+                else: character_definitions.append(f"SUBJECT {i} (Vinny): [[VISUALS: {base_desc}]] [[TRIVIA: Chaos, Pizza]]")
                 continue
             
             # User Lookup
@@ -92,44 +89,47 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                     clean_key = key.replace('_', ' ').lower()
                     if re.search(r'\d{17,}', clean_value) or re.search(r'<@!?&?\d+>', clean_value): continue
                     
-                    if 'gender' in clean_key: gender_fact = clean_value.title()
-                    elif any(k in clean_key for k in PET_KEYWORDS): pet_facts.append(f"{clean_value}") # Just value for flow
-                    elif any(k in clean_key for k in appearance_keywords): appearance_facts.append(clean_value)
-                    else: other_facts.append(clean_value)
+                    if 'gender' in clean_key: 
+                        gender_fact = clean_value.title()
+                    elif any(k in clean_key for k in PET_KEYWORDS): 
+                        # Keep key for pets too (e.g. "Pet: Dog")
+                        pet_facts.append(f"{clean_value}") 
+                    elif any(k in clean_key for k in appearance_keywords): 
+                        # --- THE FIX IS HERE ---
+                        # We now send "Skin: Tan" instead of just "Tan"
+                        appearance_facts.append(f"{clean_key}: {clean_value}")
+                    else: 
+                        other_facts.append(clean_value)
 
             # Construct Visual String
             visuals_block = []
             if gender_fact and "unknown" not in gender_fact.lower(): visuals_block.append(gender_fact)
-            if appearance_facts: visuals_block.extend(appearance_facts)
-            else: visuals_block.append("person")
+            
+            if appearance_facts: 
+                visuals_block.extend(appearance_facts)
+            else: 
+                visuals_block.append("person")
             
             visual_string = ", ".join(visuals_block)
 
             # === FORMATTING FOR MODES ===
             if input_image_bytes:
-                # EDIT MODE: Natural Sentence
-                # "a tall man with glasses"
+                # EDIT MODE
+                # "a Male, Skin: Dark, Hair: Black"
                 desc = f"a {visual_string}"
-                
-                # ADD PETS IF REQUESTED
-                # "a tall man with glasses accompanied by a golden retriever"
                 if pet_facts and is_pet_requested:
                     desc += f" accompanied by their {', '.join(pet_facts)}"
-                
                 character_definitions.append(desc)
 
             else:
-                # GENERATION MODE: Director Tags
+                # GENERATION MODE
                 char_str = f"SUBJECT {i} ({user.display_name}): [[VISUALS: {visual_string}]] "
                 
-                # ADD PETS
                 if pet_facts and is_pet_requested: 
                     char_str += f"[[MANDATORY PETS: {', '.join(pet_facts)}]] "
                 elif pet_facts: 
-                    # If not requested, put in trivia pile
                     other_facts.extend(pet_facts)
                 
-                # ADD TRIVIA
                 if other_facts:
                     random.shuffle(other_facts)
                     char_str += f"[[TRIVIA: {', '.join(other_facts[:6])}]]"
@@ -158,8 +158,6 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 "**YOUR TASK:** Write a detailed image generation prompt.\n"
                 "1. **VISUAL ACCURACY:** Describe characters exactly as defined in [[VISUALS]].\n"
                 "2. **ACTION:** Make them engage with the scene based on [[TRIVIA]] or the USER REQUEST.\n"
-                "3. **COMPOSITION:** Use dynamic angles. No boring passport photos.\n"
-                "4. **ART STYLE:** Choose a unique art style.\n\n"
                 "**OUTPUT:** Provide ONLY the final image prompt text."
             )
 
@@ -232,6 +230,8 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 "## CRITICAL INSTRUCTIONS:\n"
                 "1. **STRICT OBEDIENCE:** You MUST include every specific action/object the user requested.\n"
                 "2. **STYLE:** Pick a unique style unless the user requested one.\n"
+                "3. **COMPOSITION:** Use dynamic angles. No boring passport photos.\n"
+                "4. **ART STYLE:** Choose a unique art style.\n\n"
                 f"## User Request:\n\"{image_prompt}\"\n\n"
                 "## Your Output:\n"
                 "Provide a single JSON object with 3 keys:\n"
