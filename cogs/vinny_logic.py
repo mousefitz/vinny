@@ -32,7 +32,8 @@ class VinnyLogic(commands.Cog):
         self.memory_scheduler.start()
         self.status_rotator.start()
         self.channel_image_history = TTLCache(maxsize=100, ttl=600)
-        
+        self.user_last_message = {} # Stores {user_id: {'content': str, 'time': datetime}}
+
     def cog_unload(self):
         self.memory_scheduler.cancel()
         self.status_rotator.cancel()
@@ -72,7 +73,46 @@ class VinnyLogic(commands.Cog):
             # Log the full error to console so we can debug other issues
             logging.error(f"Error in command '{ctx.command}':", exc_info=error)
        
+    async def handle_relationship(self, message, sentiment_analysis):
+        """
+        Determines the score change (Spam vs. Sentiment) and calls the DB.
+        """
+        user_id = str(message.author.id)
+        guild_id = str(message.guild.id) if message.guild else "dm_context"
+        content = message.content.strip().lower()
+        current_time = datetime.datetime.now()
+
+        # --- 1. SPAM CHECK ---
+        is_spam = False
+        last_msg = self.user_last_message.get(user_id)
+
+        # If user spoke recently (within 30s) AND said the exact same thing
+        if last_msg:
+            time_diff = (current_time - last_msg['time']).total_seconds()
+            if last_msg['content'] == content and time_diff < 30:
+                is_spam = True
+
+        # Update Memory
+        self.user_last_message[user_id] = {'content': content, 'time': current_time}
+
+        # --- 2. DETERMINE POINTS ---
+        score_change = 0
+
+        if is_spam:
+            score_change = -2
+            try: await message.add_reaction("😠") 
+            except: pass
+        else:
+            sentiment = sentiment_analysis.get('sentiment', 'neutral')
+            if sentiment == 'positive': score_change = 1
+            elif sentiment == 'negative': score_change = -1
         
+        # --- 3. SAVE TO DATABASE ---
+        if score_change != 0:
+            await self.bot.firestore_service.update_relationship_score(
+                user_id, guild_id, score_change
+            )
+                
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         bot_names = ["vinny", "vincenzo", "vin vin"]
@@ -346,6 +386,7 @@ class VinnyLogic(commands.Cog):
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
                                 await self.update_mood_based_on_sentiment(user_sentiment)
                                 await self.update_vinny_mood()
+                                await self.handle_relationship(message, user_sentiment)
                             except Exception as e: logging.error(f"Background mood update failed: {e}")
                         asyncio.create_task(update_sentiment_background())
                         

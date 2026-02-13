@@ -11,10 +11,14 @@ from utils import api_clients
 from readability import Document
 
 async def get_keywords_for_memory_search(bot_instance, text: str):
-    """Extracts keywords from text for memory search."""
+    """
+    Extracts semantic keywords using AI, with a Regex fallback for speed/safety.
+    """
+    # 1. Quick length check to save money
     if len(text) < 10:
         return []
-    
+
+    # 2. Try the SMART way (AI)
     prompt = f"Extract 3-5 key topics or keywords from this text for memory search: '{text}'. Return as a comma-separated list."
     try:
         response = await bot_instance.make_tracked_api_call(
@@ -25,9 +29,16 @@ async def get_keywords_for_memory_search(bot_instance, text: str):
         if response and response.text:
             keywords = [k.strip() for k in response.text.split(',')]
             return keywords
+            
     except Exception as e:
-        logging.error(f"Failed to extract keywords: {e}")
-    return []
+        logging.error(f"AI Keyword Extraction failed: {e}")
+    
+    # 3. Fallback to the CHEAP way (Regex) if AI fails
+    # This ensures Vinny never crashes just because the API hiccuped.
+    ignore_words = {"the", "and", "is", "it", "to", "in", "of", "that", "this", "for", "with", "you", "me", "vinny"}
+    words = re.findall(r'\w+', text.lower())
+    keywords = [w for w in words if w not in ignore_words and len(w) > 3]
+    return keywords[:3]
 
 async def handle_direct_reply(bot_instance, message: discord.Message):
     """Handles a direct reply (via reply or mention) to one of the bot's messages OR another user's image."""
@@ -598,21 +609,6 @@ async def update_relationship_status(bot_instance, user_id: str, guild_id: str |
         await bot_instance.firestore_service.save_user_profile_fact(user_id, guild_id, "relationship_status", new_status)
         logging.info(f"Relationship status for user {user_id} changed from '{current_status}' to '{new_status}' (Score: {new_score:.2f})")
 
-async def get_keywords_for_memory_search(bot_instance, text: str):
-    """Extracts search keywords from a user message."""
-    ignore_words = {"the", "and", "is", "it", "to", "in", "of", "that", "this", "for", "with", "you", "me", "vinny"}
-    words = re.findall(r'\w+', text.lower())
-    keywords = [w for w in words if w not in ignore_words and len(w) > 3]
-    return keywords[:3]
-
-import logging
-import aiohttp
-import discord
-import asyncio
-from bs4 import BeautifulSoup
-from readability import Document
-from utils import api_clients
-
 async def summarize_url(client, http_session, url):
     """
     Ultra-Robust summarizer with a Googlebot fallback and Archive API check.
@@ -681,19 +677,3 @@ async def summarize_url(client, http_session, url):
         return f"**{title}**\n\n{summary}" if summary else "brain fog. couldn't summarize."
     except Exception:
         return "the page code is a mess, i can't make sense of it."
-    
-async def search_google_images(http_session, api_key, search_engine_id, query):
-    """Queries Google Custom Search for images."""
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {
-        "q": query, "key": api_key, "cx": search_engine_id,
-        "searchType": "image", "num": 10
-    }
-    try:
-        async with http_session.get(url, params=params) as response:
-            if response.status == 200:
-                data = await response.json()
-                return [item["link"] for item in data.get("items", []) if "link" in item]
-    except Exception as e:
-        logging.error(f"Image search error: {e}")
-    return []
