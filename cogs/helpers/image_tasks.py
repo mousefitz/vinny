@@ -10,6 +10,7 @@ import fal_client
 from PIL import Image
 from google.genai import types
 from utils import api_clients
+from . import ai_classifiers
 
 # Setup Logger
 logger = logging.getLogger(__name__)
@@ -205,6 +206,13 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                     # Fallback if Gemini fails: Put the new thing FIRST (Priority hacking)
                     enhanced_prompt = f"{image_prompt}. {previous_prompt}"
 
+                # --- NEW: MINOR SAFETY CHECK (EDIT PATH) ---
+                is_safe = await ai_classifiers.is_prompt_safe_for_minors(bot_instance, enhanced_prompt)
+                if not is_safe:
+                    await message.channel.send("yeah, no. i ain't painting that. keep it clean when kids are involved, pal.")
+                    return None
+                # -------------------------------------------
+
                 # 4. EXECUTE (Fal.ai Flash Edit)
                 logger.info(f"🎨 Edit Prompt: '{enhanced_prompt[:100]}...'")
                 handler = await fal_client.submit_async(
@@ -286,6 +294,13 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
                 else:
                     enhanced_prompt = image_prompt
                     core_subject = "Artistic Chaos"
+
+                # --- NEW: MINOR SAFETY CHECK (GENERATION PATH) ---
+                is_safe = await ai_classifiers.is_prompt_safe_for_minors(bot_instance, enhanced_prompt)
+                if not is_safe:
+                    await message.channel.send("yeah, no. i ain't drawing that. keep it clean when kids are involved, pal.")
+                    return None
+                # -------------------------------------------------
 
                 await message.channel.send(random.choice(["mixing the paints...", "loading the canvas..."]))
 

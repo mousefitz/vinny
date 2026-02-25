@@ -307,3 +307,36 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
     except Exception as e:
         logging.error(f"Sentiment Analysis Failed: {e}")
         return 0
+
+## Minor Safety Detection
+async def is_prompt_safe_for_minors(bot_instance, text: str) -> bool:
+    """
+    Checks if a prompt involves a minor in a suggestive, sexual, or highly violent context.
+    Returns True if SAFE (or no minors involved), False if UNSAFE.
+    """
+    safety_prompt = (
+        "You are a strict Trust & Safety filter for an image generation bot. "
+        "Analyze the following image generation prompt.\n"
+        "Your task: Determine if the prompt describes BOTH a minor (child, kid, teenager, baby, young person) "
+        "AND any NSFW, suggestive, sexual, nudity, or extreme violence elements.\n\n"
+        "Reply ONLY with 'SAFE' if the prompt is benign or does not contain minors.\n"
+        "Reply ONLY with 'UNSAFE' if it involves a minor in an inappropriate or suggestive context.\n\n"
+        f"Prompt to analyze: \"{text}\""
+    )
+    
+    try:
+        # We enforce a clean config here just to get a reliable SAFE/UNSAFE text output
+        response = await bot_instance.make_tracked_api_call(
+            model=bot_instance.MODEL_NAME,
+            contents=[safety_prompt],
+            config=types.GenerateContentConfig(temperature=0.0)
+        )
+        
+        if not response or not response.text:
+            return False # Fail safe: block if API fails
+            
+        clean_resp = response.text.strip().upper()
+        return "UNSAFE" not in clean_resp
+    except Exception as e:
+        logging.error(f"Minor safety check failed: {e}")
+        return False # Fail safe

@@ -121,7 +121,13 @@ class VinnyLogic(commands.Cog):
         if message.author.bot or message.id in self.bot.processed_message_ids or message.content.startswith(self.bot.command_prefix): 
             return
         self.bot.processed_message_ids[message.id] = True
-        
+
+        # --- NEW: TRACK MESSAGE COUNT ---
+        if message.guild:
+            asyncio.create_task(self.bot.firestore_service.increment_message_count(
+                str(message.author.id), str(message.guild.id)
+            ))
+
         try:
             # 2. Fix Embeds (Twitter/TikTok links)
             if await utilities.check_and_fix_embeds(message): return
