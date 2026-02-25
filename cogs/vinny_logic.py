@@ -491,6 +491,7 @@ class VinnyLogic(commands.Cog):
         # --- General Commands ---
         embed.add_field(name="!vinnyknows [fact]", value="Teaches me somethin' about you. spill the beans.\n*Example: `!vinnyknows my favorite color is blue`*", inline=False)
         embed.add_field(name="!vibe [@user]", value="Checks what I think of you (or someone else if you tag 'em).", inline=False)
+        embed.add_field(name="!leaderboard", value="Shows the server leaderboards (The Vibe List and The Earaches).", inline=False)
         embed.add_field(name="!rolecolor [hex1] [hex2]", value="Sets your custom role color (and optional gradient).\n*Example: `!rolecolor #FF0000 #0000FF`*", inline=False)
         embed.add_field(name="!rolename [new name]", value="Renames your custom color role.\n*Example: `!rolename The Big Cheese`*", inline=False)
         embed.add_field(name="!forgetme", value="Makes me forget everything I know about you *in this server*.", inline=False)
@@ -510,6 +511,7 @@ class VinnyLogic(commands.Cog):
         if is_admin:
             embed.add_field(name="----------------", value="**👑 BOSS COMMANDS 👑**", inline=False)
             embed.add_field(name="!setup_rolecolor [#channel] [@role]", value="**(Admin)** Sets the allowed channel and anchor role for !rolecolor.", inline=False)
+            embed.add_field(name="!sync_messages", value="**(Admin)** Scans the server history to backfill The Earaches leaderboard.", inline=False)
             
         if await self.bot.is_owner(ctx.author):
             embed.add_field(name="!vinnycost", value="**(Owner Only)** Checks the daily bill. See how much cash I'm burning.", inline=False)
@@ -869,50 +871,182 @@ class VinnyLogic(commands.Cog):
 
 # --- LEADERBOARD COMMAND ---
 
-    @commands.command(name='leaderboard', aliases=['ranks', 'top'])
+    # --- LEADERBOARD COMMAND ---
+
+    @commands.command(name='leaderboard', aliases=['ranks', 'top', 'boards'])
     async def leaderboard_command(self, ctx):
-        """Shows the most loved and most hated users in the server."""
+        """Shows various server leaderboards (Vibe, Earaches, etc.) with pagination."""
         if not ctx.guild: return await ctx.send("Server only, pal.")
         
         async with ctx.typing():
+            # --- 1. FETCH DATA FOR ALL BOARDS ---
             top_users, bottom_users = await self.bot.firestore_service.get_leaderboard_data(str(ctx.guild.id))
+            yap_users = await self.bot.firestore_service.get_message_leaderboard(str(ctx.guild.id), limit=10)
             
-            if not top_users and not bottom_users:
-                return await ctx.send("I don't know anyone here yet. No scores to show.")
-                
-            embed = discord.Embed(title="🏆 Vinny's List", description="Here's who I like... and who's on thin ice.", color=discord.Color.gold())
+            embeds = []
             
             # --- Helper to format lines ---
-            async def format_list(users, emoji_first, emoji_others):
+            async def format_list(users, emoji_first, emoji_others, value_key='score'):
                 text_lines = []
                 for i, user in enumerate(users, 1):
                     try:
-                        # Try to get their name
                         member = ctx.guild.get_member(int(user['id'])) or await ctx.guild.fetch_member(int(user['id']))
                         name = member.display_name
                     except:
                         name = "Unknown Ghost"
                     
-                    score = int(user['score'])
-                    emoji = emoji_first if i == 1 else emoji_others
-                    text_lines.append(f"{emoji} **{i}. {name}**: {score}")
+                    val = int(user[value_key])
+                    
+                    # Custom Emoji Logic for the Chat Board
+                    if value_key == 'count':
+                        if i == 1:
+                            emoji = "👑"
+                        elif i == 2:
+                            emoji = "🥈"
+                        elif i == 3:
+                            emoji = "🥉"
+                        else:
+                            emoji = "💬"
+                    # Standard logic for the Vibe Board
+                    else:
+                        emoji = emoji_first if i == 1 else emoji_others
+                    
+                    # Text Formatting
+                    if value_key == 'count': 
+                        text_lines.append(f"{emoji} **{i}. {name}**: {val:,} messages")
+                    else: 
+                        text_lines.append(f"{emoji} **{i}. {name}**: {val}")
+                        
                 return "\n".join(text_lines)
 
-            # --- Add Fields ---
+            # --- 2. BUILD PAGE 1: VIBE BOARD ---
+            vibe_embed = discord.Embed(title="🏆 Vinny's Vibe List", description="Here's who I like... and who's on thin ice.", color=discord.Color.gold())
+            has_vibe_data = False
+            
             if top_users:
-                top_text = await format_list(top_users, "👑", "⭐")
-                embed.add_field(name="💖 Most Loved (The Favorites)", value=top_text, inline=False)
+                top_text = await format_list(top_users, "👑", "⭐", 'score')
+                vibe_embed.add_field(name="💖 Most Loved (The Favorites)", value=top_text, inline=False)
+                has_vibe_data = True
             
             if bottom_users:
-                # Only show bottom users if their score is actually negative
                 negative_users = [u for u in bottom_users if u['score'] < 0]
                 if negative_users:
-                    bottom_text = await format_list(negative_users, "💀", "💢")
-                    embed.add_field(name="💔 Most Hated (The Hit List)", value=bottom_text, inline=False)
+                    bottom_text = await format_list(negative_users, "💀", "💢", 'score')
+                    vibe_embed.add_field(name="💔 Most Hated (The Hit List)", value=bottom_text, inline=False)
+                    has_vibe_data = True
+                    
+            if not has_vibe_data:
+                vibe_embed.description = "I don't know anyone here well enough yet."
                 
-            embed.set_footer(text="Better luck next time, bozos.")
+            vibe_embed.set_footer(text="Page 1/2 | The Vibe Board")
+            embeds.append(vibe_embed)
+
+            # --- 3. BUILD PAGE 2: THE EARACHES ---
+            yap_embed = discord.Embed(title="🗣️ The Earaches", description="My ears are bleeding. Here's why.", color=discord.Color.blue())
+            if yap_users:
+                # The fallback emojis here don't matter because of the custom logic above, but we pass them anyway
+                yap_text = await format_list(yap_users, "👑", "💬", 'count') 
+                yap_embed.description = yap_text
+            else:
+                yap_embed.description = "Nobody's said a word yet, or I haven't synced the history.\n*(Admins can run `!sync_messages`)*"
+                
+            yap_embed.set_footer(text="Page 2/2 | The Earaches")
+            embeds.append(yap_embed)
+
+            # --- 4. CREATE PAGINATION VIEW ---
+            class LeaderboardView(discord.ui.View):
+                def __init__(self, embeds):
+                    super().__init__(timeout=120) # Buttons expire after 2 minutes
+                    self.embeds = embeds
+                    self.current_page = 0
+                    
+                @discord.ui.button(label="◀️ Previous", style=discord.ButtonStyle.blurple, disabled=True)
+                async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                    if interaction.user != ctx.author:
+                        return await interaction.response.send_message("Hey, keep your hands off the remote. You didn't ask for this menu.", ephemeral=True)
+                    self.current_page -= 1
+                    await self.update_message(interaction)
+                    
+                @discord.ui.button(label="Next ▶️", style=discord.ButtonStyle.blurple)
+                async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                    if interaction.user != ctx.author:
+                        return await interaction.response.send_message("Hey, keep your hands off the remote. You didn't ask for this menu.", ephemeral=True)
+                    self.current_page += 1
+                    await self.update_message(interaction)
+                    
+                async def update_message(self, interaction: discord.Interaction):
+                    # Toggle button accessibility based on the page
+                    self.children[0].disabled = self.current_page == 0
+                    self.children[1].disabled = self.current_page >= len(self.embeds) - 1
+                    await interaction.response.edit_message(embed=self.embeds[self.current_page], view=self)
+
+            # --- 5. SEND IT ---
+            view = LeaderboardView(embeds)
+            await ctx.send(embed=embeds[0], view=view)
+
+# --- SYNC MESSAGES COMMAND ---
+
+    @commands.command(name='sync_messages')
+    @commands.has_permissions(manage_guild=True)
+    async def sync_messages_command(self, ctx):
+        """
+        [ADMIN ONLY] Reads the entire history of all channels and threads to backfill The Earaches.
+        """
+        await ctx.send("aight, I'm gonna start reading the ancient scrolls. this might take a *long* time. i'll let you know when I'm done.")
+        
+        counts = {}
+        processed_channels = 0
+
+        # Combine Text Channels, Voice Channels (they have text chats now), and Threads
+        all_channels = ctx.guild.text_channels + ctx.guild.voice_channels + ctx.guild.threads
+
+        async with ctx.typing():
+            for channel in all_channels:
+                # Some channel types (like voice) might not have this permission explicitly checkable the same way, 
+                # but we'll try/except to be safe.
+                if isinstance(channel, (discord.TextChannel, discord.VoiceChannel)):
+                    if not channel.permissions_for(ctx.guild.me).read_message_history:
+                        continue
+                        
+                try:
+                    # limit=None tells Discord to fetch literally everything
+                    async for msg in channel.history(limit=None):
+                        if msg.author.bot: # THIS KEEPS BOTS OFF THE LEADERBOARD
+                            continue
+                        
+                        uid = str(msg.author.id)
+                        counts[uid] = counts.get(uid, 0) + 1
+                        
+                    processed_channels += 1
+                except discord.Forbidden:
+                    continue # Skip channels Vinny isn't allowed to see
+                except AttributeError:
+                    continue # Skip if the channel type doesn't support history
+                except Exception as e:
+                    logging.error(f"Error reading channel {channel.name}: {e}")
+                    
+            # Save the tallied counts to Firestore
+            path = constants.get_user_profile_collection_path(self.bot.APP_ID, str(ctx.guild.id))
             
-        await ctx.send(embed=embed)       
+            # Use a batch to upload them efficiently (Firestore batches support up to 500 operations)
+            batch = self.bot.firestore_service.db.batch()
+            operations = 0
+            
+            for uid, count in counts.items():
+                doc_ref = self.bot.firestore_service.db.collection(path).document(uid)
+                batch.set(doc_ref, {"message_count": count}, merge=True)
+                operations += 1
+                
+                # If we have a massive server with >500 users, commit and start a new batch
+                if operations % 450 == 0:
+                    await self.bot.loop.run_in_executor(None, batch.commit)
+                    batch = self.bot.firestore_service.db.batch()
+                    
+            # Commit any remaining in the final batch
+            if operations % 450 != 0:
+                await self.bot.loop.run_in_executor(None, batch.commit)
+            
+        await ctx.send(f"phew. done reading. i scanned {processed_channels} channels and threads. `!leaderboard` is officially synced.")
 
 # --- ROLE MANAGEMENT COMMANDS ---
    

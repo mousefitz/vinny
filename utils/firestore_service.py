@@ -397,4 +397,34 @@ class FirestoreService:
         except Exception:
             logging.error(f"Failed to fetch leaderboard for guild {guild_id}", exc_info=True)
             return [], []
+
+# --- MESSAGE COUNTING METHODS ---
+
+    async def increment_message_count(self, user_id: str, guild_id: str):
+        """Increments a user's total message count in real-time."""
+        if not self.db or not guild_id: return
         
+        path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
+        doc_ref = self.db.collection(path).document(user_id)
+        
+        try:
+            await self.loop.run_in_executor(
+                None, lambda: doc_ref.set({"message_count": firestore.Increment(1)}, merge=True)
+            )
+        except Exception as e:
+            logging.error(f"Failed to increment message count for {user_id}: {e}")
+
+    async def get_message_leaderboard(self, guild_id: str, limit: int = 10):
+        """Fetches the top users sorted by total messages."""
+        if not self.db: return []
+        
+        path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
+        collection_ref = self.db.collection(path)
+        
+        try:
+            query = collection_ref.order_by("message_count", direction=firestore.Query.DESCENDING).limit(limit)
+            docs = await self.loop.run_in_executor(None, query.stream)
+            return [{"id": doc.id, "count": doc.to_dict().get("message_count", 0)} for doc in docs]
+        except Exception as e:
+            logging.error(f"Failed to fetch message leaderboard for guild {guild_id}", exc_info=True)
+            return []   
