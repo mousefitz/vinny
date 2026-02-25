@@ -72,42 +72,47 @@ class VinnyLogic(commands.Cog):
         else:
             # Log the full error to console so we can debug other issues
             logging.error(f"Error in command '{ctx.command}':", exc_info=error)
-       
-    async def handle_relationship(self, message, sentiment_analysis):
-        """
-        Determines the score change (Spam vs. Sentiment) and calls the DB.
-        """
+
+    async def check_and_update_spam(self, message):
+        """Checks for spam and updates the last message memory. Returns (is_duplicate, is_rapid)."""
         user_id = str(message.author.id)
-        guild_id = str(message.guild.id) if message.guild else "dm_context"
         content = message.content.strip().lower()
         current_time = datetime.datetime.now()
-
-        # --- 1. SPAM CHECK ---
-        is_spam = False
+        
+        is_duplicate_spam = False
+        is_rapid_fire = False
+        
         last_msg = self.user_last_message.get(user_id)
-
-        # If user spoke recently (within 30s) AND said the exact same thing
         if last_msg:
             time_diff = (current_time - last_msg['time']).total_seconds()
-            if last_msg['content'] == content and time_diff < 30:
-                is_spam = True
-
-        # Update Memory
+            
+            # Check 1: Did they copy-paste the exact same thing recently? (within 60s)
+            # You can change '60' to '300' if you want a 5-minute spam block!
+            if last_msg['content'] == content and time_diff < 60:
+                is_duplicate_spam = True
+            # Check 2: Are they rapid-firing different messages? (less than 5 seconds apart)
+            elif time_diff < 5:
+                is_rapid_fire = True
+                
         self.user_last_message[user_id] = {'content': content, 'time': current_time}
+        return is_duplicate_spam, is_rapid_fire
 
-        # --- 2. DETERMINE POINTS ---
+    async def handle_relationship(self, message, sentiment_analysis, is_rapid=False):
+        """Determines the score change based on sentiment."""
+        user_id = str(message.author.id)
+        guild_id = str(message.guild.id) if message.guild else "dm_context"
+
+        if is_rapid:
+            return # Rapid fire typing gets no points to prevent farming
+            
+        # Normal conversation! Award points based on sentiment.
         score_change = 0
-
-        if is_spam:
-            score_change = -2
-            try: await message.add_reaction("😠") 
-            except: pass
-        else:
-            sentiment = sentiment_analysis.get('sentiment', 'neutral')
-            if sentiment == 'positive': score_change = 1
-            elif sentiment == 'negative': score_change = -1
+        sentiment = sentiment_analysis.get('sentiment', 'neutral')
+        if sentiment == 'positive': 
+            score_change = 1
+        elif sentiment == 'negative': 
+            score_change = -1
         
-        # --- 3. SAVE TO DATABASE ---
         if score_change != 0:
             await self.bot.firestore_service.update_relationship_score(
                 user_id, guild_id, score_change
@@ -387,12 +392,37 @@ class VinnyLogic(commands.Cog):
                          await message.channel.send(f"your name? i call ya '{user_name_to_use}'.")
 
                     else: 
+                        # --- SPAM CHECK BEFORE RESPONDING ---
+                        is_duplicate, is_rapid = await self.check_and_update_spam(message)
+                        
+                        if is_duplicate:
+                            try: await message.add_reaction("😠") 
+                            except: pass
+                            
+                            # The AI Beatdown Prompt!
+                            beatdown_prompt = (
+                                f"{self.bot.personality_instruction}\n\n"
+                                f"# TASK:\n"
+                                f"The user '{message.author.display_name}' just copy-pasted the exact same message to try and farm relationship points with you. "
+                                f"Their spam message was: \"{message.content}\"\n\n"
+                                f"Give them a short, highly creative, angry verbal beatdown telling them to stop spamming. "
+                                f"Mock them for trying to cheat the system. Do NOT answer their original prompt."
+                            )
+                            try:
+                                resp = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[beatdown_prompt], config=self.bot.GEMINI_TEXT_CONFIG)
+                                if resp and resp.text: await message.reply(resp.text.strip())
+                            except:
+                                await message.reply("stop copy-pasting the same garbage, pal. i ain't givin' you points for that.")
+                            return # Stop processing the message!
+
+                        # If not duplicate spam, process normally
                         async def update_sentiment_background():
                             try:
                                 user_sentiment = await ai_classifiers.get_message_sentiment(self.bot, message.content)
                                 await self.update_mood_based_on_sentiment(user_sentiment)
                                 await self.update_vinny_mood()
-                                await self.handle_relationship(message, user_sentiment)
+                                # Pass the 'is_rapid' flag so he knows not to award points
+                                await self.handle_relationship(message, user_sentiment, is_rapid=is_rapid)
                             except Exception as e: logging.error(f"Background mood update failed: {e}")
                         asyncio.create_task(update_sentiment_background())
                         
