@@ -998,7 +998,7 @@ class VinnyLogic(commands.Cog):
         processed_channels = 0
 
         # Combine Text Channels, Voice Channels (they have text chats now), and Threads
-        all_channels = ctx.guild.text_channels + ctx.guild.voice_channels + ctx.guild.threads
+        all_channels = ctx.guild.text_channels + ctx.guild.voice_channels + list(ctx.guild.threads)
 
         async with ctx.typing():
             for channel in all_channels:
