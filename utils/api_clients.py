@@ -174,22 +174,6 @@ async def get_5_day_forecast(http_session: aiohttp.ClientSession, api_key: str, 
         logging.error("5-Day Forecast API call failed.", exc_info=True)
     return None
 
-# --- Horoscope API ---
-
-async def get_horoscope(http_session: aiohttp.ClientSession, sign: str):
-    if not http_session: return None
-    url = "https://horoscope-app-api.vercel.app/api/v1/get-horoscope/daily"
-    params = {"sign": sign.lower(), "day": "today"}
-    try:
-        async with http_session.get(url, params=params) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data and data.get("status") and "data" in data:
-                    return data["data"]
-    except Exception:
-        logging.error("Horoscope API call failed.", exc_info=True)
-    return None
-
 # --- Google Custom Search API for Image Search ---
 
 async def search_google_images(http_session, api_key, query):

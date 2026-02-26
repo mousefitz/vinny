@@ -8,6 +8,7 @@ import logging
 import contextlib
 import json
 import os
+import aiohttp
 from zoneinfo import ZoneInfo
 from typing import TYPE_CHECKING
 from google.genai import types
@@ -688,21 +689,60 @@ class VinnyLogic(commands.Cog):
         valid_signs = list(constants.SIGN_EMOJIS.keys())
         clean_sign = sign.lower()
         if clean_sign not in valid_signs: return await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
+        
+        # Get the current date in New York time
+        current_time = datetime.datetime.now(ZoneInfo("America/New_York"))
+        today_date_str = current_time.strftime('%Y-%m-%d')
+        
+        # 1. CHECK THE CACHE (Wipe it if it's a new day)
+        if self.horoscope_cache["date"] != today_date_str:
+            self.horoscope_cache = {"date": today_date_str, "data": {}}
+            
         async with ctx.typing():
-            horoscope_data = await api_clients.get_horoscope(self.bot.http_session, clean_sign)
-            if not horoscope_data: return await ctx.send("the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk.")
-            boring_horoscope = horoscope_data.get('horoscope_data', "The stars ain't talkin' today.")
-            vinnyfied_text = boring_horoscope
-            try:
-                rewrite_prompt = (f"{self.bot.personality_instruction}\n\n# --- YOUR TASK ---\nYou must rewrite a boring horoscope into a chaotic, flirty, and slightly unhinged one in your own voice. The user's sign is **{clean_sign.title()}**. The boring horoscope is: \"{boring_horoscope}\"\n\n## INSTRUCTIONS:\nGenerate a short, single-paragraph monologue that gives you their horoscope in your unique, chaotic style. Do not just repeat the horoscope; interpret it with your personality.")
-                response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[rewrite_prompt], config=self.bot.GEMINI_TEXT_CONFIG)
-                if response and response.text: vinnyfied_text = response.text.strip()
-            except Exception: logging.error("Failed to Vinny-fy the horoscope.", exc_info=True)
+            # 2. SERVE FROM CACHE IF WE ALREADY WROTE IT TODAY
+            if clean_sign in self.horoscope_cache["data"]:
+                vinnyfied_text = self.horoscope_cache["data"][clean_sign]
+            else:
+                # 3. GENERATE A NEW ONE IF IT'S THE FIRST TIME TODAY
+                vinnyfied_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
+                try:
+                    # --- FETCH THE "REAL" DATA FROM THE API ---
+                    raw_api_data = "Astrology data unavailable today."
+                    async with aiohttp.ClientSession() as session:
+                        # Hitting the standard endpoint for most of these free APIs
+                        api_url = f"https://freehoroscopeapi.com/api/v1/get-horoscope/daily?sign={clean_sign}&day=today"
+                        async with session.get(api_url) as resp:
+                            if resp.status == 200:
+                                # We just grab the raw JSON text. Gemini is smart enough to read it!
+                                raw_api_data = await resp.text() 
+                                
+                    # --- TRANSLATE TO VINNY-SPEAK ---
+                    prompt = (
+                        f"{self.bot.personality_instruction}\n\n"
+                        f"# --- YOUR TASK ---\n"
+                        f"You are giving a daily horoscope reading for the sign **{clean_sign.title()}**.\n"
+                        f"Here is the actual, real astrological data for today straight from the API:\n"
+                        f"```json\n{raw_api_data}\n```\n\n"
+                        f"## INSTRUCTIONS:\n"
+                        f"Rewrite the core meaning of that exact horoscope data into a short, single-paragraph daily reading in your unique, chaotic, flirty, and slightly unhinged voice. "
+                        f"Keep the astrological themes the same, but completely change the wording so it sounds like YOU."
+                    )
+                    response = await self.bot.make_tracked_api_call(model=self.bot.MODEL_NAME, contents=[prompt], config=self.bot.GEMINI_TEXT_CONFIG)
+                    
+                    if response and response.text: 
+                        vinnyfied_text = response.text.strip()
+                        # Save it to the cache!
+                        self.horoscope_cache["data"][clean_sign] = vinnyfied_text
+                        
+                except Exception as e: 
+                    logging.error(f"Failed to generate Vinny horoscope: {e}")
+
+            # 4. SEND THE EMBED
             emoji = constants.SIGN_EMOJIS.get(clean_sign, "✨")
             embed = discord.Embed(title=f"{emoji} Horoscope for {clean_sign.title()}", description=vinnyfied_text, color=discord.Color.dark_purple())
             embed.set_thumbnail(url="https://i.imgur.com/4laks52.gif")
             embed.set_footer(text="don't blame me if the stars lie. they're drama queens.")
-            embed.timestamp = datetime.datetime.now(ZoneInfo("America/New_York"))
+            embed.timestamp = current_time
             await ctx.send(embed=embed)
 
     @commands.command(name='vinnyknows')
