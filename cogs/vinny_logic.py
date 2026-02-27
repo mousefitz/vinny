@@ -688,40 +688,43 @@ class VinnyLogic(commands.Cog):
     async def horoscope_command(self, ctx, *, sign: str):
         valid_signs = list(constants.SIGN_EMOJIS.keys())
         clean_sign = sign.lower()
-        if clean_sign not in valid_signs: return await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
+        if clean_sign not in valid_signs: 
+            return await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
         
-        # Get the current date in New York time
-        current_time = datetime.datetime.now(ZoneInfo("America/New_York"))
+        # --- BULLETPROOF CACHE SETUP ---
+        if not hasattr(self, 'horoscope_cache'):
+            self.horoscope_cache = {"date": None, "data": {}}
+            
+        import datetime
+        current_time = datetime.datetime.now()
         today_date_str = current_time.strftime('%Y-%m-%d')
         
-        # 1. CHECK THE CACHE (Wipe it if it's a new day)
+        # Wipe the cache if it's a new day
         if self.horoscope_cache["date"] != today_date_str:
             self.horoscope_cache = {"date": today_date_str, "data": {}}
             
         async with ctx.typing():
-            # 2. SERVE FROM CACHE IF WE ALREADY WROTE IT TODAY
+            # Serve from cache if we already wrote it today
             if clean_sign in self.horoscope_cache["data"]:
                 vinnyfied_text = self.horoscope_cache["data"][clean_sign]
             else:
-                # 3. GENERATE A NEW ONE IF IT'S THE FIRST TIME TODAY
+                # Generate a new one if it's the first time today
                 vinnyfied_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
                 try:
-                    # --- FETCH THE "REAL" DATA FROM THE API ---
+                    import aiohttp
                     raw_api_data = "Astrology data unavailable today."
+                    
                     async with aiohttp.ClientSession() as session:
-                        # Hitting the standard endpoint for most of these free APIs
                         api_url = f"https://freehoroscopeapi.com/api/v1/get-horoscope/daily?sign={clean_sign}&day=today"
                         async with session.get(api_url) as resp:
                             if resp.status == 200:
-                                # We just grab the raw JSON text. Gemini is smart enough to read it!
                                 raw_api_data = await resp.text() 
                                 
-                    # --- TRANSLATE TO VINNY-SPEAK ---
                     prompt = (
                         f"{self.bot.personality_instruction}\n\n"
                         f"# --- YOUR TASK ---\n"
                         f"You are giving a daily horoscope reading for the sign **{clean_sign.title()}**.\n"
-                        f"Here is the actual, real astrological data for today straight from the API:\n"
+                        f"Here is the actual, real astrological data for today:\n"
                         f"```json\n{raw_api_data}\n```\n\n"
                         f"## INSTRUCTIONS:\n"
                         f"Rewrite the core meaning of that exact horoscope data into a short, single-paragraph daily reading in your unique, chaotic, flirty, and slightly unhinged voice. "
@@ -731,20 +734,20 @@ class VinnyLogic(commands.Cog):
                     
                     if response and response.text: 
                         vinnyfied_text = response.text.strip()
-                        # Save it to the cache!
                         self.horoscope_cache["data"][clean_sign] = vinnyfied_text
                         
                 except Exception as e: 
+                    import logging
                     logging.error(f"Failed to generate Vinny horoscope: {e}")
 
-            # 4. SEND THE EMBED
+            # Send the embed!
+            import discord
             emoji = constants.SIGN_EMOJIS.get(clean_sign, "✨")
             embed = discord.Embed(title=f"{emoji} Horoscope for {clean_sign.title()}", description=vinnyfied_text, color=discord.Color.dark_purple())
             embed.set_thumbnail(url="https://i.imgur.com/4laks52.gif")
             embed.set_footer(text="don't blame me if the stars lie. they're drama queens.")
-            embed.timestamp = current_time
             await ctx.send(embed=embed)
-
+            
     @commands.command(name='vinnyknows')
     async def vinnyknows_command(self, ctx, *, knowledge_string: str):
         target_user = ctx.author
