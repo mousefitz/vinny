@@ -128,8 +128,8 @@ async def get_intent_from_prompt(bot_instance, message):
         if not response or not response.text: 
             return "general_conversation", {}
             
-        # Regex Safety Net
-        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        # Regex Safety Net (Greedy Fix)
+        clean_text = re.search(r'```json\s*(\{.*\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*\})', response.text, re.DOTALL)
         json_string = clean_text.group(1) if clean_text else response.text
         
         intent_data = json.loads(json_string)
@@ -170,8 +170,8 @@ async def triage_question(bot_instance, question_text: str) -> str:
         if not response or not response.text: 
             return "personal_opinion"
             
-        # Regex Safety Net
-        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        # Regex Safety Net (Greedy Fix)
+        clean_text = re.search(r'```json\s*(\{.*\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*\})', response.text, re.DOTALL)
         json_string = clean_text.group(1) if clean_text else response.text
         
         data = json.loads(json_string)
@@ -301,8 +301,8 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
             return 0 
         
         # --- Success ---
-        # Bulletproof Regex Extractor
-        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        # Bulletproof Regex Extractor (Greedy Fix)
+        clean_text = re.search(r'```json\s*(\{.*\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*\})', response.text, re.DOTALL)
         json_string = clean_text.group(1) if clean_text else response.text
         
         data = json.loads(json_string)

@@ -68,12 +68,12 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
         if not response or not response.text: 
             return None 
             
-        # --- THE FIX: Bulletproof Regex Extractor ---
-        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        # --- THE FIX: Bulletproof Regex Extractor (Greedy Fix) ---
+        clean_text = re.search(r'```json\s*(\{.*\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*\})', response.text, re.DOTALL)
         json_string = clean_text.group(1) if clean_text else response.text
         
         return json.loads(json_string)
-            
+    
     except Exception:
         logging.error("Fact extraction failed.", exc_info=True)
 
