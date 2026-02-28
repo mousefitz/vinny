@@ -954,8 +954,6 @@ class VinnyLogic(commands.Cog):
 
 # --- LEADERBOARD COMMAND ---
 
-    # --- LEADERBOARD COMMAND ---
-
     @commands.command(name='leaderboard', aliases=['ranks', 'top', 'boards'])
     async def leaderboard_command(self, ctx):
         """Shows various server leaderboards (Vibe, Earaches, etc.) with pagination."""
@@ -1029,7 +1027,9 @@ class VinnyLogic(commands.Cog):
             if yap_users:
                 # The fallback emojis here don't matter because of the custom logic above, but we pass them anyway
                 yap_text = await format_list(yap_users, "👑", "💬", 'count') 
-                yap_embed.description = yap_text
+                
+                # --- THE FIX: Add a field instead of overwriting the description ---
+                yap_embed.add_field(name="Top Yappers", value=yap_text, inline=False)
             else:
                 yap_embed.description = "Nobody's said a word yet, or I haven't synced the history.\n*(Admins can run `!sync_messages`)*"
                 
