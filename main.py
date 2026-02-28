@@ -88,7 +88,7 @@ class VinnyBot(commands.Bot):
 
         # --- Bot State & Globals ---
         # UPDATED: Use the specific model requested
-        self.MODEL_NAME = "gemini-3.0-flash-preview"
+        self.MODEL_NAME = "gemini-3-flash-preview"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 50

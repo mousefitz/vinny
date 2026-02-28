@@ -111,7 +111,7 @@ async def generate_image_with_genai(client, prompt, model=model_name):
   
 # --- Google GenAI Text Generation ---
 
-async def generate_text_with_genai(client, prompt, model="gemini-3.0-flash-preview"):
+async def generate_text_with_genai(client, prompt, model="gemini-3-flash-preview"):
     """
     Generates text using the tracked wrapper so costs hit the ledger.
     """
