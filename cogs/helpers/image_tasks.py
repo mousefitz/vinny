@@ -124,6 +124,10 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 "You are an expert AI Art Director.\n"
                 f"**INPUT DATA:**\n{source_data}\n{user_request}\n\n"
                 "**TASK:** Write a detailed image generation prompt.\n"
+                "**RULES:**\n"
+                "1. IF THE USER ASKS TO BE AN OBJECT OR ANIMAL: DO NOT put human anatomical features (human faces, hair, eyes) on the object! "
+                "Instead, translate their physical traits into the object's aesthetic (e.g., use their hair/eye color as a paint job or color scheme). "
+                "Use their interests/pets as decals or background props.\n"
                 "**OUTPUT:** Provide ONLY the final image prompt text."
             )
             style_response = await bot_instance.make_tracked_api_call(
