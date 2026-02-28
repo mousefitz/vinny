@@ -109,7 +109,13 @@ class VinnyLogic(commands.Cog):
             
         # Normal conversation! Award points based on sentiment.
         score_change = 0
-        sentiment = sentiment_analysis.get('sentiment', 'neutral')
+        
+        # --- THE FIX: Safely check if it's a dict or a string ---
+        if isinstance(sentiment_analysis, dict):
+            sentiment = sentiment_analysis.get('sentiment', 'neutral').lower()
+        else:
+            sentiment = str(sentiment_analysis).lower()
+            
         if sentiment == 'positive': 
             score_change = 1
         elif sentiment == 'negative': 
