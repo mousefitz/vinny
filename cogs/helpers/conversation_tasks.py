@@ -47,8 +47,7 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
     if message.reference and message.reference.message_id:
         try:
             replied_to_message = await message.channel.fetch_message(message.reference.message_id)
-        except:
-            pass
+        except: pass
     else:
         async for prior_message in message.channel.history(limit=10):
             if prior_message.author == bot_instance.user:
@@ -59,42 +58,56 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
         await handle_text_or_image_response(bot_instance, message, is_autonomous=False)
         return
 
-    # --- 1. RELATIONSHIP SCORING ---
+    user_id = str(message.author.id)
+    guild_id = str(message.guild.id) if message.guild else None
+
+    # --- 1. GET FULL MEMORY & TONE ---
+    user_profile = await bot_instance.firestore_service.get_user_profile(user_id, guild_id)
+    rel_score = user_profile.get("relationship_score", 0)
+    facts = user_profile.get("facts", {})
+    facts_str = "\n".join([f"- {k}: {v}" for k, v in facts.items()]) if facts else "No specific facts remembered yet."
+
+    # Dynamic Tone
+    if rel_score >= 60: tone_instruction = "## RELATIONSHIP: BEST FRIEND (High Trust)\n- You LOVE this user. Be warm, enthusiastic, and loyal.\n- Use nicknames like 'pal', 'buddy', 'boss'."
+    elif rel_score >= 10: tone_instruction = "## RELATIONSHIP: FRIEND (Good Terms)\n- You like this user. Be casual and friendly."
+    elif rel_score >= -10: tone_instruction = "## RELATIONSHIP: NEUTRAL\n- You don't know this user well. Be guarded and indifferent."
+    elif rel_score >= -60: tone_instruction = "## RELATIONSHIP: DISLIKED (Suspicious)\n- You DO NOT trust this user. Be short, dismissive, and sarcastic.\n- If they ask for something, complain."
+    else: tone_instruction = "## RELATIONSHIP: ENEMY (Hostile)\n- You HATE this user. Be openly rude, mocking, and aggressive.\n- Tell them to get lost."
+
+    # --- 2. RELATIONSHIP SCORING ---
     if len(message.content) > 3:
         impact_score = await ai_classifiers.analyze_sentiment_impact(
             bot_instance, message.author.display_name, message.content
         )
         if impact_score != 0:
-            user_id = str(message.author.id)
-            guild_id = str(message.guild.id) if message.guild else None
-            # Fire and forget update
             asyncio.create_task(bot_instance.firestore_service.update_relationship_score(user_id, guild_id, impact_score))
 
-    user_name_to_use = await bot_instance.firestore_service.get_user_nickname(str(message.author.id)) or message.author.display_name
+    user_name_to_use = await bot_instance.firestore_service.get_user_nickname(user_id) or message.author.display_name
     
-    # --- 2. PREPARE THE PROMPT ---
-    context_snippet = ""
-    async for msg in message.channel.history(limit=3, before=message):
-        if msg.content:
-            context_snippet = f"{msg.author.display_name}: {msg.content}\n" + context_snippet
+    # --- 3. BUILD THE PROMPT SCRIPT ---
+    chat_transcript = ""
+    async for msg in message.channel.history(limit=5, before=message):
+        chat_transcript = f"{msg.author.display_name}: {msg.content}\n" + chat_transcript
 
     reply_prompt_text = (
-        f"{bot_instance.personality_instruction}\n\n"
-        f"# --- CONVERSATION CONTEXT ---\n"
+        f"## YOUR CURRENT STATE:\n"
+        f"- Mood: {bot_instance.current_mood}\n"
+        f"{tone_instruction}\n\n"
+        f"## KNOWN FACTS ABOUT {user_name_to_use.upper()}:\n{facts_str}\n\n"
+        f"## RECENT CHAT TRANSCRIPT:\n{chat_transcript}\n"
+        f"--- END TRANSCRIPT ---\n\n"
+        f"## CONTEXT OF THE DIRECT REPLY:\n"
         f"You previously said: \"{replied_to_message.content}\"\n"
-        f"The user '{user_name_to_use}' has now directly replied to you with: \"{message.content}\"\n\n"
-        f"# --- YOUR TASK ---\n"
-        f"Based on this direct reply, generate a short, in-character response. Your mood is '{bot_instance.current_mood}'.\n"
+        f"The user '{user_name_to_use}' has directly replied to THAT specific message with: \"{message.content}\"\n\n"
+        f"## YOUR TASK:\n"
+        f"Generate a short, in-character response to their reply. \n"
         f"CRITICAL RULES:\n"
         f"1. **DO NOT REPEAT** the user's message back to them.\n"
-        f"2. If looking at an image, comment on it specifically.\n"
-        f"3. Respond directly to the **intent**."
+        f"2. If looking at an image, comment on it specifically."
     )
 
-    # --- 3. HANDLE IMAGES (The Eyes) ---
+    # --- 4. HANDLE IMAGES (The Eyes) ---
     api_parts = []
-    
-    # A. Check for image in the REPLIED-TO message (Context)
     if replied_to_message.attachments:
         for att in replied_to_message.attachments:
             if "image" in att.content_type:
@@ -104,10 +117,8 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
                         api_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=att.content_type))
                         reply_prompt_text = "[SYSTEM: The user is replying to the image attached above.]\n" + reply_prompt_text
                         break
-                except Exception as e:
-                    logging.error(f"Failed to attach context image: {e}")
+                except Exception as e: logging.error(f"Failed to attach context image: {e}")
 
-    # B. Check for image in the CURRENT message (User input)
     if message.attachments:
          for att in message.attachments:
             if "image" in att.content_type:
@@ -117,30 +128,21 @@ async def handle_direct_reply(bot_instance, message: discord.Message):
                         api_parts.append(types.Part.from_bytes(data=image_bytes, mime_type=att.content_type))
                         reply_prompt_text = "[SYSTEM: The user sent the image attached above.]\n" + reply_prompt_text
                         break
-                except Exception as e:
-                    logging.error(f"Failed to attach current image: {e}")
+                except Exception as e: logging.error(f"Failed to attach current image: {e}")
 
-    # Add text last
     api_parts.append(types.Part(text=reply_prompt_text))
 
     try:
         response = await bot_instance.make_tracked_api_call(
-            model=bot_instance.MODEL_NAME,
-            contents=[types.Content(role="user", parts=api_parts)],
-            config=bot_instance.GEMINI_TEXT_CONFIG
+            model=bot_instance.MODEL_NAME, contents=[types.Content(role="user", parts=api_parts)], config=bot_instance.GEMINI_TEXT_CONFIG
         )
-        
         if response and response.text:
             cleaned_response = response.text.strip()
             if cleaned_response and cleaned_response.lower() != '[silence]':
                 for chunk in bot_instance.split_message(cleaned_response):
                     await message.channel.send(chunk.lower())
-        else:
-            await message.channel.send("huh? sorry i spaced out for a second.")
-            
-    except Exception:
-        logging.error("Failed to handle direct reply.", exc_info=True)
-        await message.channel.send("my brain just shorted out for a second.")
+        else: await message.channel.send("huh? sorry i spaced out for a second.")
+    except Exception: await message.channel.send("my brain just shorted out for a second.")
 
 async def handle_text_or_image_response(bot_instance, message: discord.Message, is_autonomous: bool = False, summary: str = ""):
     """Core logic for generating a text response based on chat history."""
@@ -197,111 +199,79 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                         memory_strings.append(f"- [{date_str}]: {mem.get('summary')}")
                     relevant_memories_text = "\n".join(memory_strings)
 
-        # --- HISTORY CONSTRUCTION ---
-        # 1. System Instruction
-        history = [types.Content(role='user', parts=[types.Part(text=bot_instance.personality_instruction)])]
-
-        # 2. Memories
-        if relevant_memories_text:
-            history.append(types.Content(role='user', parts=[types.Part(text=f"## RECALLED MEMORIES FROM PAST CONVERSATIONS:\n(Use these only if relevant to the current topic)\n{relevant_memories_text}")]))
-
-        # 3. Model Acknowledgment
-        history.append(types.Content(role='model', parts=[types.Part(text="aight, i get it. i'm vinny.")]))
-
-        # 4. Recent Chat History (The Context)
-        async for msg in message.channel.history(limit=bot_instance.MAX_CHAT_HISTORY_LENGTH, before=message):
-            user_line = f"{msg.author.display_name} (ID: {msg.author.id}): {msg.content}"
-            bot_line = f"{msg.author.display_name}: {msg.content}"
-            history.append(types.Content(role="model" if msg.author == bot_instance.user else "user", parts=[types.Part(text=bot_line if msg.author == bot_instance.user else user_line)]))
-        history.reverse()
-
+        # --- 1. DETERMINE SPECIFIC INSTRUCTIONS (Triage / Autonomous) ---
         cleaned_content = re.sub(f'<@!?{bot_instance.user.id}>', '', message.content).strip()
-        final_instruction_text = ""
         config = bot_instance.GEMINI_TEXT_CONFIG
-        
-        # 1. Handle Triage (Tools vs Chat)
+        task_instruction = ""
+
         if "?" in message.content:
             question_type = await ai_classifiers.triage_question(bot_instance, cleaned_content)
-            
             if question_type == "real_time_search":
-                # Enable Search Tool
                 config = types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
                     safety_settings=bot_instance.GEMINI_TEXT_CONFIG.safety_settings,
                     max_output_tokens=bot_instance.GEMINI_TEXT_CONFIG.max_output_tokens,
                     temperature=bot_instance.GEMINI_TEXT_CONFIG.temperature
                 )
-                final_instruction_text = (
-                    "CRITICAL TASK: The user has asked a factual question requiring a search. You MUST use the provided Google Search tool to find a real-world, accurate answer. "
-                    "FIRST, provide the direct, factual answer. AFTER providing the fact, you can add a short, in-character comment."
-                )
+                task_instruction = "CRITICAL TASK: The user asked a factual question. You MUST use the Google Search tool to find the answer. Provide the fact, then add a short in-character comment."
             elif question_type == "general_knowledge":
-                final_instruction_text = (
-                    "CRITICAL TASK: The user has asked a factual question. Answer it accurately based on your internal knowledge. "
-                    "FIRST, provide the direct, factual answer. AFTER providing the fact, you can add a short, in-character comment."
-                )
-            else: 
-                final_instruction_text = (
-                    f"{tone_instruction}\n\n"
-                    f"## KNOWN USER FACTS:\n{facts_str}\n\n"
-                    f"The user '{actual_display_name}' asked you a personal question. "
-                    f"Answer them directly and honestly (in character). "
-                    f"Do not summarize the chat. Just answer the question. Your mood is {bot_instance.current_mood}."
-                )
-        else:
-            # Standard Chat logic
-            if len(cleaned_content) < 4 and not message.attachments:
-                final_instruction_text = (
-                    f"{tone_instruction}\n\n"
-                    f"## KNOWN USER FACTS:\n{facts_str}\n\n"
-                    f"The user '{actual_display_name}' just said your name to get your attention.\n"
-                    f"1. **LOOK UP:** Look at the recent chat history above.\n"
-                    f"2. **CONNECT:** If there was a conversation happening, continue it. If silence, just acknowledge them.\n"
-                    f"3. **DO NOT SUMMARIZE.**"
-                )
+                task_instruction = "CRITICAL TASK: Answer the factual question accurately based on your internal knowledge, then add an in-character comment."
             else:
-                # --- UPDATED CONTEXT LOGIC ---
-                final_instruction_text = (
-                    f"{tone_instruction}\n\n"
-                    f"## KNOWN USER FACTS:\n{facts_str}\n\n"
-                    f"The user '{actual_display_name}' has sent a new message in this channel.\n\n"
-                    f"## CRITICAL INSTRUCTION: DETECT CONVERSATION FLOW\n"
-                    f"1. **LOOK UP:** Read the chat history immediately above this new message.\n"
-                    f"2. **CONNECT:** Is this message a response to something you or someone else just said? If yes, CONTINUE that specific topic.\n"
-                    f"3. **INTERPRET:** If the message is short (e.g., 'no way', 'really?', 'why?'), it refers to the PREVIOUS message in history. Do not treat it as a standalone statement.\n"
-                    f"4. **RESPOND:** Reply naturally to the user. Do not repeat their message."
-                )
-
-        if is_autonomous:
-            final_instruction_text = (
-                f"{tone_instruction}\n\n"
-                f"Your mood is {bot_instance.current_mood}. You are 'hanging out' in this chat server and just reading the stream of messages above.\n\n"
-                "## YOUR TASK:\n"
-                "Chime in naturally as if you were just another user sitting on the couch with them.\n\n"
-                "## RULES:\n"
-                "1. **READ THE ROOM:** Don't just react to the very last sentence. Look at the last few messages to understand the *topic* (are they fighting? joking? telling a story?).\n"
-                "2. **ADD VALUE:** Don't just say 'lol' or 'cool'. Add a joke, an opinion, or a question that keeps the vibe going.\n"
-                "3. **BE BRIEF:** casual, lowercase, short."
+                task_instruction = "TASK: The user asked a personal question. Answer directly and honestly in character. Do not summarize the chat."
+        elif is_autonomous:
+            task_instruction = (
+                "TASK: You are 'hanging out' in this chat server. Chime in naturally as if sitting on the couch with them.\n"
+                "RULES:\n1. READ THE ROOM: Understand the topic of the chat history.\n2. ADD VALUE: Don't just say 'lol', add a joke or question.\n3. BE BRIEF."
+            )
+        else:
+            task_instruction = (
+                "TASK: Detect the conversation flow.\n"
+                "1. CONNECT: If this message responds to the chat history, CONTINUE the topic.\n"
+                "2. INTERPRET: If it's short (e.g., 'why?'), it refers to the previous message. Do not treat it as a standalone statement.\n"
+                "3. RESPOND: Reply naturally. Do not repeat their message."
             )
 
+        # --- 2. BUILD THE CHAT TRANSCRIPT (Short-Term Memory) ---
+        chat_transcript = ""
         participants = set()
         async for msg in message.channel.history(limit=bot_instance.MAX_CHAT_HISTORY_LENGTH, before=message):
             if not msg.author.bot: participants.add(msg.author.display_name)
+            
+            # Add a marker if the past message had files attached
+            attachment_note = ""
+            if msg.attachments:
+                attachment_note = f" [Attached {len(msg.attachments)} file(s)]"
+                
+            chat_transcript = f"{msg.author.display_name}: {msg.content}{attachment_note}\n" + chat_transcript
+        
         participants.add(actual_display_name)
         participant_list = ", ".join(sorted(list(participants)))
 
-        attribution_instruction = (
-            f"\n\n# --- ATTENTION: ACCURATE SPEAKER ATTRIBUTION ---\n"
-            f"The users in this conversation are: [{participant_list}].\n"
-            f"CRITICAL RULE: You MUST correctly attribute all statements and questions to the person who actually said them."
+        # --- 3. ASSEMBLE THE MASTER PROMPT ---
+        master_prompt_text = (
+            f"## YOUR CURRENT STATE:\n"
+            f"- Mood: {bot_instance.current_mood}\n"
+            f"{tone_instruction}\n\n"
         )
-        final_instruction_text += attribution_instruction
+        
+        if facts_str and facts_str != "No specific facts remembered yet.":
+            master_prompt_text += f"## KNOWN FACTS ABOUT {actual_display_name.upper()}:\n{facts_str}\n\n"
+            
+        if relevant_memories_text:
+            master_prompt_text += f"## RECALLED SERVER MEMORIES (Use if relevant):\n{relevant_memories_text}\n\n"
 
-        history.append(types.Content(role='user', parts=[types.Part(text=final_instruction_text)]))
-        
-        final_user_message_text = f"{actual_display_name} (ID: {message.author.id}): {cleaned_content}"
-        prompt_parts = [types.Part(text=final_user_message_text)]
-        
+        master_prompt_text += (
+            f"## CURRENT CONVERSATION TRANSCRIPT:\n"
+            f"(The users talking are: [{participant_list}]. Correctly attribute all statements to who said them.)\n"
+            f"{chat_transcript}\n"
+            f"--- END TRANSCRIPT ---\n\n"
+            f"## {task_instruction}\n\n"
+            f"Now, reply to this new message from {actual_display_name}:\n"
+            f"{actual_display_name}: {cleaned_content}"
+        )
+
+        # --- 4. PREPARE THE API CALL ---
+        prompt_parts = [types.Part(text=master_prompt_text)]
         uploaded_media_file = None 
 
         if message.attachments:
@@ -329,9 +299,12 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                             if os.path.exists(temp_filename): os.remove(temp_filename)
                     break
 
-        history.append(types.Content(role='user', parts=prompt_parts))
-
-        response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=history, config=config)
+        # Send it as ONE unified message block
+        history = [types.Content(role='user', parts=prompt_parts)]
+        
+        # ADD THIS: Show the typing indicator while Gemini thinks!
+        async with message.channel.typing():
+            response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=history, config=config)
 
         if uploaded_media_file:
             try: await asyncio.to_thread(bot_instance.gemini_client.files.delete, name=uploaded_media_file.name)
@@ -375,7 +348,6 @@ async def handle_knowledge_request(bot_instance, message: discord.Message, targe
     facts_string = "\n".join(facts_list)
     
     summary_prompt = (
-        f"{bot_instance.personality_instruction}\n\n"
         f"# --- YOUR TASK ---\n"
         f"The user '{message.author.display_name}' has asked what you know about '{target_user.display_name}'. "
         f"Your only task is to summarize the facts listed below about **'{target_user.display_name}' ONLY**. "
@@ -413,7 +385,7 @@ async def handle_server_knowledge_request(bot_instance, message: discord.Message
         await message.channel.send(f"this place? i ain't learned nothin' yet. it's all a blur. a beautiful, chaotic blur.")
         return
     formatted_summaries = "\n".join([f"- {s.get('summary', '...a conversation i already forgot.')}" for s in summaries])
-    synthesis_prompt = (f"{bot_instance.personality_instruction}\n\n# --- YOUR TASK ---\nA user, '{message.author.display_name}', is asking what you've learned from overhearing conversations in this server. Your task is to synthesize the provided conversation summaries into a single, chaotic, and insightful monologue. Obey all your personality directives.\n\n## CONVERSATION SUMMARIES I'VE OVERHEARD:\n{formatted_summaries}\n\n## INSTRUCTIONS:\n1.  Read all the summaries to get a feel for the server's vibe.\n2.  Do NOT just list the summaries. Weave them together into a story or a series of scattered, in-character thoughts.\n3.  Generate a short, lowercase, typo-ridden response that shows what you've gleaned from listening in.")
+    synthesis_prompt = (f"# --- YOUR TASK ---\nA user, '{message.author.display_name}', is asking what you've learned from overhearing conversations in this server. Your task is to synthesize the provided conversation summaries into a single, chaotic, and insightful monologue. Obey all your personality directives.\n\n## CONVERSATION SUMMARIES I'VE OVERHEARD:\n{formatted_summaries}\n\n## INSTRUCTIONS:\n1.  Read all the summaries to get a feel for the server's vibe.\n2.  Do NOT just list the summaries. Weave them together into a story or a series of scattered, in-character thoughts.\n3.  Generate a short, lowercase, typo-ridden response that shows what you've gleaned from listening in.")
     try:
         async with message.channel.typing():
             response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=[synthesis_prompt], config=bot_instance.GEMINI_TEXT_CONFIG)
@@ -453,7 +425,8 @@ async def handle_correction(bot_instance, message: discord.Message):
             if not response1 or not response1.text:
                 await message.channel.send("my brain's all fuzzy, i didn't get what i was wrong about."); return
             
-            fact_data = json.loads(response1.text)
+            clean_text1 = re.search(r'```json\s*(\{.*?\})\s*```', response1.text, re.DOTALL) or re.search(r'(\{.*?\})', response1.text, re.DOTALL)
+            fact_data = json.loads(clean_text1.group(1)) if clean_text1 else {}
             facts_to_remove = fact_data.get("facts_to_remove", [])
             
             if not facts_to_remove:
@@ -484,7 +457,8 @@ async def handle_correction(bot_instance, message: discord.Message):
             if not response2 or not response2.text:
                 await message.channel.send("i thought i knew somethin' but i can't find it in my brain. weird."); return
             
-            key_data = json.loads(response2.text)
+            clean_text2 = re.search(r'```json\s*(\{.*?\})\s*```', response2.text, re.DOTALL) or re.search(r'(\{.*?\})', response2.text, re.DOTALL)
+            key_data = json.loads(clean_text2.group(1)) if clean_text2 else {}
             keys_to_delete = key_data.get("keys_to_delete", [])
             
             if not keys_to_delete:
@@ -542,7 +516,6 @@ async def find_and_tag_member(bot_instance, message, user_name: str, times: int 
                 name_info += f" You know them as '{target_nickname}'."
 
             tagging_prompt = (
-                f"{bot_instance.personality_instruction}\n\n"
                 f"# --- YOUR TASK ---\n"
                 f"You are acting as a messenger. The user '{message.author.display_name}' wants you to deliver a message to someone else.\n\n"
                 f"## INSTRUCTIONS:\n"
@@ -609,7 +582,7 @@ async def update_relationship_status(bot_instance, user_id: str, guild_id: str |
         await bot_instance.firestore_service.save_user_profile_fact(user_id, guild_id, "relationship_status", new_status)
         logging.info(f"Relationship status for user {user_id} changed from '{current_status}' to '{new_status}' (Score: {new_score:.2f})")
 
-async def summarize_url(client, http_session, url):
+async def summarize_url(bot_instance, http_session, url): # Renamed to bot_instance
     """
     Ultra-Robust summarizer with a Googlebot fallback and Archive API check.
     """
@@ -672,8 +645,12 @@ async def summarize_url(client, http_session, url):
         
         if len(clean_text) < 200: return "got the page, but it's empty. maybe a login wall?"
 
-        prompt = f"Summarize this article titled '{title}' in your witty, flirty, chaotic voice:\n\n{clean_text[:25000]}"
-        summary = await api_clients.generate_text_with_genai(client, prompt)
+        prompt = (
+            f"# TASK:\n"
+            f"Summarize this article titled '{title}' in your specific voice:\n\n{clean_text[:25000]}"
+        )
+        # Pass bot_instance to the generator so it tracks the cost!
+        summary = await api_clients.generate_text_with_genai(bot_instance, prompt)
         return f"**{title}**\n\n{summary}" if summary else "brain fog. couldn't summarize."
     except Exception:
         return "the page code is a mess, i can't make sense of it."

@@ -33,7 +33,8 @@ class VinnyLogic(commands.Cog):
         self.memory_scheduler.start()
         self.status_rotator.start()
         self.channel_image_history = TTLCache(maxsize=100, ttl=600)
-        self.user_last_message = {} # Stores {user_id: {'content': str, 'time': datetime}}
+        # FIX: Prevents infinite memory leak by clearing old spam data after 5 minutes
+        self.user_last_message = TTLCache(maxsize=1000, ttl=300)
 
     def cog_unload(self):
         self.memory_scheduler.cancel()
@@ -174,7 +175,7 @@ class VinnyLogic(commands.Cog):
                             break
                 if target_url:
                     async with message.channel.typing():
-                        summary = await conversation_tasks.summarize_url(self.bot.gemini_client, self.bot.http_session, target_url)
+                        summary = await conversation_tasks.summarize_url(self.bot, self.bot.http_session, target_url)
                         await message.reply(summary)
                     return 
 
@@ -402,7 +403,6 @@ class VinnyLogic(commands.Cog):
                             
                             # The AI Beatdown Prompt!
                             beatdown_prompt = (
-                                f"{self.bot.personality_instruction}\n\n"
                                 f"# TASK:\n"
                                 f"The user '{message.author.display_name}' just copy-pasted the exact same message to try and farm relationship points with you. "
                                 f"Their spam message was: \"{message.content}\"\n\n"
@@ -668,14 +668,21 @@ class VinnyLogic(commands.Cog):
                 self.embeds = embeds
                 self.current_page = 0
                 if len(self.embeds) < 2: self.children[1].disabled = True
+                
             @discord.ui.button(label="Previous", style=discord.ButtonStyle.grey, disabled=True)
             async def previous_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if interaction.user != ctx.author:
+                    return await interaction.response.send_message("get your own weather report, pal.", ephemeral=True)
                 self.current_page -= 1
                 await self.update_message(interaction)
+                
             @discord.ui.button(label="Next", style=discord.ButtonStyle.blurple)
             async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+                if interaction.user != ctx.author:
+                    return await interaction.response.send_message("get your own weather report, pal.", ephemeral=True)
                 self.current_page += 1
                 await self.update_message(interaction)
+                
             async def update_message(self, interaction: discord.Interaction):
                 self.children[0].disabled = self.current_page == 0
                 self.children[1].disabled = self.current_page >= len(self.embeds) - 1
@@ -721,7 +728,6 @@ class VinnyLogic(commands.Cog):
                                 raw_api_data = await resp.text() 
                                 
                     prompt = (
-                        f"{self.bot.personality_instruction}\n\n"
                         f"# --- YOUR TASK ---\n"
                         f"You are giving a daily horoscope reading for the sign **{clean_sign.title()}**.\n"
                         f"Here is the actual, real astrological data for today:\n"
@@ -771,7 +777,6 @@ class VinnyLogic(commands.Cog):
             facts_confirmation = ", ".join(saved_facts)
             target_name = "themselves" if target_user == ctx.author else target_user.display_name
             confirmation_prompt = (
-                f"{self.bot.personality_instruction}\n\n"
                 f"# --- YOUR TASK ---\n"
                 f"A user just taught you a fact. Your task is to confirm that you've learned it in your own chaotic, reluctant, or flirty way. Obey all your personality directives.\n\n"
                 f"## CONTEXT:\n"
@@ -879,7 +884,6 @@ class VinnyLogic(commands.Cog):
         
         # 4. Generate Comment
         prompt = (
-            f"{self.bot.personality_instruction}\n\n"
             f"# TASK:\n"
             f"The user '{ctx.author.display_name}' is checking your opinion of '{target_user.display_name}'.\n"
             f"- Your Current Mood: {mood}\n"
@@ -1228,11 +1232,9 @@ class VinnyLogic(commands.Cog):
             try:
                 # --- CREATE (If missing) ---
                 if not role:
-                    
                     role = await ctx.guild.create_role(
                         name=ctx.author.name,
                         color=color_obj_1,
-                        secondary_color=color_obj_2, # Can be None
                         reason="Vinny Custom Role"
                     )
                     
@@ -1251,18 +1253,20 @@ class VinnyLogic(commands.Cog):
                 if role not in ctx.author.roles:
                     await ctx.author.add_roles(role)
 
+                # UPDATE EXISTING ROLE
                 await role.edit(
                     color=color_obj_1,
-                    secondary_color=color_obj_2, # Passing the discord.Color object!
                     reason="Vinny Color Update"
                 )
 
                 # --- CONFIRMATION ---
                 c1_disp = f"#{hex1_str}"
+                # Still output the gradient text to the user if they asked for it, 
+                # even though Discord only applies the first color to the actual role.
                 c2_disp = f"#{hex2_str}" if hex2_str else None
 
                 if color_obj_2:
-                    await ctx.send(f"set **{role.name}** to gradient: **{c1_disp}** -> **{c2_disp}**.")
+                    await ctx.send(f"i can't do actual gradients in discord, pal, but i set **{role.name}** to **{c1_disp}**.")
                 else:
                     await ctx.send(f"set **{role.name}** to **{c1_disp}**.")
 

@@ -4,7 +4,7 @@ import logging
 from google.genai import types
 
 # --- GLOBAL SAFETY SETTINGS ---
-# Use "OFF" for Gemini 2.5 Flash compatibility
+# Use "OFF" for Gemini Flash compatibility
 SAFETY_SETTINGS = [
     types.SafetySetting(
         category=cat, threshold="OFF"
@@ -125,10 +125,14 @@ async def get_intent_from_prompt(bot_instance, message):
             config=json_config 
         )
         
-        if not response: 
+        if not response or not response.text: 
             return "general_conversation", {}
             
-        intent_data = json.loads(response.text)
+        # Regex Safety Net
+        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        json_string = clean_text.group(1) if clean_text else response.text
+        
+        intent_data = json.loads(json_string)
         return intent_data.get("intent"), intent_data.get("args", {})
 
     except json.JSONDecodeError:
@@ -163,11 +167,16 @@ async def triage_question(bot_instance, question_text: str) -> str:
         response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME, contents=[triage_prompt], config=json_config
         )
-        if not response: 
+        if not response or not response.text: 
             return "personal_opinion"
             
-        data = json.loads(response.text)
+        # Regex Safety Net
+        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        json_string = clean_text.group(1) if clean_text else response.text
+        
+        data = json.loads(json_string)
         return data.get("question_type", "personal_opinion")
+    
     except Exception:
         logging.error("Failed to triage question, defaulting to personal_opinion.", exc_info=True)
         return "personal_opinion"
@@ -195,15 +204,14 @@ async def is_a_correction(bot_instance, message, text_gen_config) -> bool:
         f"Known Facts: \"{known_facts}\"\nUser Message: \"{message.content}\""
     )
     try:
-        # Use a safe config with our custom settings
         safe_config = types.GenerateContentConfig(safety_settings=SAFETY_SETTINGS)
-        
-        response = await bot_instance.gemini_client.aio.models.generate_content(
+        # Replaced the raw SDK call with your tracked wrapper
+        response = await bot_instance.make_tracked_api_call(
             model=bot_instance.MODEL_NAME, 
             contents=[contradiction_check_prompt], 
             config=safe_config
         )
-        if "yes" in response.text.lower():
+        if response and response.text and "yes" in response.text.lower():
             logging.info(f"Correction detected for user {message.author.display_name}. Message: '{message.content}'")
             return True
     except Exception:
@@ -246,12 +254,9 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
     Asks the AI to judge the message.
     STRICT MODE: Caps all score changes to max 5 points.
     """
-    vinny_personality = bot_instance.personality_instruction
-
     prompt = (
         f"You are the hidden sentiment engine for a character. "
-        f"Your ONLY job is to rate how the user's message impacts their relationship with him.\n"
-        f"--- CHARACTER ---\n{vinny_personality}\n--- END CHARACTER ---\n\n"
+        f"Your ONLY job is to rate how the user's message impacts their relationship with him.\n\n"
         f"USER: {user_name}\n"
         f"MESSAGE: \"{message_text}\"\n\n"
         f"## SCORING RULES (STRICT CAP: 5 POINTS)\n"
@@ -275,6 +280,7 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
             model=bot_instance.MODEL_NAME,
             contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
             config=types.GenerateContentConfig(
+                system_instruction=bot_instance.personality_instruction, # <--- ADDED HERE
                 temperature=0.3, 
                 safety_settings=SAFETY_SETTINGS
             )
@@ -295,9 +301,11 @@ async def analyze_sentiment_impact(bot_instance, user_name: str, message_text: s
             return 0 
         
         # --- Success ---
-        text_response = response.text.strip()
-        text_response = re.sub(r"```json|```", "", text_response).strip()
-        data = json.loads(text_response)
+        # Bulletproof Regex Extractor
+        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        json_string = clean_text.group(1) if clean_text else response.text
+        
+        data = json.loads(json_string)
         score = int(data.get("score", 0))
         reason = data.get("reasoning", "No reason provided")
         

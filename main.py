@@ -88,7 +88,7 @@ class VinnyBot(commands.Bot):
 
         # --- Bot State & Globals ---
         # UPDATED: Use the specific model requested
-        self.MODEL_NAME = "gemini-2.5-flash"
+        self.MODEL_NAME = "gemini-3.0-flash-preview"
         self.processed_message_ids = TTLCache(maxsize=1024, ttl=60)
         self.channel_locks = {}
         self.MAX_CHAT_HISTORY_LENGTH = 50
@@ -108,6 +108,7 @@ class VinnyBot(commands.Bot):
         ]
         
         self.GEMINI_TEXT_CONFIG = types.GenerateContentConfig(
+            system_instruction=self.personality_instruction, # <--- ADD THIS LINE
             safety_settings=safety_settings_list,
             temperature=0.8
         )
@@ -185,12 +186,6 @@ class VinnyBot(commands.Bot):
         logging.info(f'Logged in as {self.user} (ID: {self.user.id})')
         logging.info('------')
 
-    async def process_commands(self, message):
-        """This function processes commands."""
-        ctx = await self.get_context(message, cls=commands.Context)
-        if ctx.command:
-            await self.invoke(ctx)
-            
     async def on_error(self, event, *args, **kwargs):
         """Catch unhandled errors."""
         logging.error(f"Unhandled error in {event}", exc_info=True)

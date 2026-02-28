@@ -84,21 +84,21 @@ class FirestoreService:
 
     async def get_docs(self, collection_path: str) -> List[Dict[str, Any]]:
         if not self.db: return []
+        def _fetch():
+            return [doc.to_dict() for doc in self.db.collection(collection_path).stream()]
         try:
-            collection_ref = self.db.collection(collection_path)
-            docs_snapshot = await self.loop.run_in_executor(None, collection_ref.stream)
-            return [doc.to_dict() for doc in docs_snapshot]
+            return await self.loop.run_in_executor(None, _fetch)
         except Exception:
             logging.error(f"Failed to get documents from '{collection_path}'", exc_info=True)
             return []
 
     async def delete_docs(self, collection_path: str):
         if not self.db: return False
+        def _delete_all():
+            for doc in self.db.collection(collection_path).stream():
+                doc.reference.delete()
         try:
-            collection_ref = self.db.collection(collection_path)
-            docs_snapshot = await self.loop.run_in_executor(None, collection_ref.stream)
-            for doc in docs_snapshot:
-                await self.loop.run_in_executor(None, doc.reference.delete)
+            await self.loop.run_in_executor(None, _delete_all)
             return True
         except Exception:
             logging.error(f"Failed to delete documents from '{collection_path}'", exc_info=True)
@@ -175,10 +175,11 @@ class FirestoreService:
     
     async def get_all_user_ids_in_guild(self, guild_id: str):
         if not self.db: return []
-        try:
+        def _fetch():
             users_ref = self.db.collection('guilds').document(str(guild_id)).collection('users')
-            docs = users_ref.stream()
-            return [doc.id for doc in docs]
+            return [doc.id for doc in users_ref.stream()]
+        try:
+            return await self.loop.run_in_executor(None, _fetch)
         except Exception as e:
             logging.error(f"Failed to fetch all users for guild {guild_id}: {e}")
             return []
@@ -380,20 +381,19 @@ class FirestoreService:
        
     async def get_leaderboard_data(self, guild_id: str, limit: int = 5):
         if not self.db: return [], []
-        
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         collection_ref = self.db.collection(path)
         
-        try:
+        def _fetch():
             top_query = collection_ref.order_by("relationship_score", direction=firestore.Query.DESCENDING).limit(limit)
-            top_docs = await self.loop.run_in_executor(None, top_query.stream)
-            top_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in top_docs]
-            
             bottom_query = collection_ref.order_by("relationship_score", direction=firestore.Query.ASCENDING).limit(limit)
-            bottom_docs = await self.loop.run_in_executor(None, bottom_query.stream)
-            bottom_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in bottom_docs]
             
-            return top_users, bottom_users
+            t_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in top_query.stream()]
+            b_users = [{"id": doc.id, "score": doc.to_dict().get("relationship_score", 0)} for doc in bottom_query.stream()]
+            return t_users, b_users
+            
+        try:
+            return await self.loop.run_in_executor(None, _fetch)
         except Exception:
             logging.error(f"Failed to fetch leaderboard for guild {guild_id}", exc_info=True)
             return [], []
@@ -417,14 +417,15 @@ class FirestoreService:
     async def get_message_leaderboard(self, guild_id: str, limit: int = 10):
         """Fetches the top users sorted by total messages."""
         if not self.db: return []
-        
         path = constants.get_user_profile_collection_path(self.APP_ID, guild_id)
         collection_ref = self.db.collection(path)
         
-        try:
+        def _fetch():
             query = collection_ref.order_by("message_count", direction=firestore.Query.DESCENDING).limit(limit)
-            docs = await self.loop.run_in_executor(None, query.stream)
-            return [{"id": doc.id, "count": doc.to_dict().get("message_count", 0)} for doc in docs]
+            return [{"id": doc.id, "count": doc.to_dict().get("message_count", 0)} for doc in query.stream()]
+            
+        try:
+            return await self.loop.run_in_executor(None, _fetch)
         except Exception as e:
             logging.error(f"Failed to fetch message leaderboard for guild {guild_id}", exc_info=True)
-            return []   
+            return []

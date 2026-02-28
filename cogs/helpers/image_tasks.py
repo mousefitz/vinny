@@ -358,7 +358,7 @@ async def handle_image_reply(bot_instance, reply_message: discord.Message, origi
 
         user_comment = re.sub(f'<@!?{bot_instance.user.id}>', '', reply_message.content).strip()
         prompt_text = (
-            f"{bot_instance.personality_instruction}\n\n# --- YOUR TASK ---\nA user, '{reply_message.author.display_name}', "
+            f"# --- YOUR TASK ---\nA user, '{reply_message.author.display_name}', "
             f"just replied to the attached image with the comment: \"{user_comment}\".\nYour task is to look "
             f"at the image and respond to their comment in your unique, chaotic, and flirty voice."
         )
@@ -371,7 +371,8 @@ async def handle_image_reply(bot_instance, reply_message: discord.Message, origi
         async with reply_message.channel.typing():
             response = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME,
-                contents=[types.Content(parts=prompt_parts)]
+                contents=[types.Content(parts=prompt_parts)],
+                config=bot_instance.GEMINI_TEXT_CONFIG
             )
             
             if response and response.text:

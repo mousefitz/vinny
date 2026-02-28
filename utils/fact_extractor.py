@@ -7,7 +7,7 @@ from google.genai import types
 async def extract_facts_from_message(bot_instance, message_or_str: discord.Message | str, author_name: str = None, image_bytes: bytes = None, mime_type: str = None):
     """
     Analyzes a user message to extract personal facts.
-    Uses 'OFF' safety settings to prevent API errors on Gemini 2.5 Flash.
+    Uses 'OFF' safety settings to prevent API errors on Gemini Flash.
     """
     if isinstance(message_or_str, discord.Message):
         user_name = message_or_str.author.display_name
@@ -17,7 +17,6 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
         user_message = str(message_or_str)
 
     # 1. Base Prompt
-    # 1. Base Prompt (UPDATED)
     fact_extraction_prompt = (
         f"You are a highly accurate fact-extraction system. The user '{user_name}' wrote the following message. "
         f"Your task is to identify personal facts **about the user '{user_name}' ONLY**.\n"
@@ -38,11 +37,11 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
     if image_bytes and mime_type:
         parts.append(types.Part(inline_data=types.Blob(mime_type=mime_type, data=image_bytes)))
 
-    # 3. DEFINE SAFETY SETTINGS LOCALLY (USING "OFF")
+    # 2. Define Safety Settings
     safety_settings_list = [
         types.SafetySetting(
             category=cat, 
-            threshold="OFF" # Explicitly use "OFF" string for 2.5 Flash
+            threshold="OFF" 
         )
         for cat in [
             types.HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -53,7 +52,7 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
     ]
 
     try:
-        # 4. Use Local Config with "OFF" settings
+        # 3. Use Local Config with "OFF" settings
         config = types.GenerateContentConfig(
             temperature=0.0,
             response_mime_type="application/json",
@@ -68,8 +67,12 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
         
         if not response or not response.text: 
             return None 
+            
+        # --- THE FIX: Bulletproof Regex Extractor ---
+        clean_text = re.search(r'```json\s*(\{.*?\})\s*```', response.text, re.DOTALL) or re.search(r'(\{.*?\})', response.text, re.DOTALL)
+        json_string = clean_text.group(1) if clean_text else response.text
         
-        return json.loads(response.text)
+        return json.loads(json_string)
             
     except Exception:
         logging.error("Fact extraction failed.", exc_info=True)

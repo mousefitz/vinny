@@ -26,13 +26,15 @@ class ImagePaginator(discord.ui.View):
 
     @discord.ui.button(label="Prev", style=discord.ButtonStyle.gray)
     async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.author: return
+        if interaction.user != self.author: 
+            return await interaction.response.send_message("get your own search results, pal.", ephemeral=True)
         self.current_page = (self.current_page - 1) % len(self.images)
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     @discord.ui.button(label="Next", style=discord.ButtonStyle.gray)
     async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.author: return
+        if interaction.user != self.author: 
+            return await interaction.response.send_message("get your own search results, pal.", ephemeral=True)
         self.current_page = (self.current_page + 1) % len(self.images)
         await interaction.response.edit_message(embed=self.get_embed(), view=self)
         
