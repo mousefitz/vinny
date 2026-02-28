@@ -35,7 +35,7 @@ def setup_logging():
     # Get the root logger
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
-    
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     # Remove any existing handlers to prevent duplicate logs
     if logger.hasHandlers():
         logger.handlers.clear()
