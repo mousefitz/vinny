@@ -83,7 +83,13 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 for key, value in user_profile.items():
                     clean_value = str(value).strip()
                     clean_key = key.replace('_', ' ').lower()
+                    
+                    # 1. Skip Discord IDs and mentions (You already have this)
                     if re.search(r'\d{17,}', clean_value) or re.search(r'<@!?&?\d+>', clean_value): continue
+                    
+                    # 2. NEW: Skip internal bot stats and purely numerical values
+                    if any(bad_word in clean_key for bad_word in ['score', 'count', 'level', 'id']): continue
+                    if re.fullmatch(r'-?\d+', clean_value): continue # Skips plain numbers like "42" or "-5"
                     
                     if 'gender' in clean_key: gender_fact = clean_value.title()
                     elif any(k in clean_key for k in PET_KEYWORDS): pet_facts.append(f"{clean_value}") 
@@ -104,7 +110,7 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 character_definitions.append(desc)
             else:
                 # GEN MODE: Tags
-                char_str = f"SUBJECT {i} ({user.display_name}): [[VISUALS: {visual_string}]] "
+                char_str = f"SUBJECT {i}: [[VISUALS: {visual_string}]] "
                 if pet_facts and is_pet_requested: char_str += f"[[MANDATORY PETS: {', '.join(pet_facts)}]] "
                 elif pet_facts: other_facts.extend(pet_facts)
                 if other_facts:
@@ -128,6 +134,8 @@ async def handle_portrait_request(bot_instance, message, target_users, details="
                 "1. IF THE USER ASKS TO BE AN OBJECT OR ANIMAL: DO NOT put human anatomical features (human faces, hair, eyes) on the object! "
                 "Instead, translate their physical traits into the object's aesthetic (e.g., use their hair/eye color as a paint job or color scheme). "
                 "Use their interests/pets as decals or background props.\n"
+                "2. NO RANDOM PEOPLE: Do NOT include random, unrecognized human faces in the background, in Polaroids, or in framed photos. "
+                "If you include any framed art, posters, or photographs in the scene, they MUST strictly depict the user's trivia, hobbies, or pets.\n"
                 "**OUTPUT:** Provide ONLY the final image prompt text."
             )
             style_response = await bot_instance.make_tracked_api_call(
