@@ -305,19 +305,29 @@ class VinnyLogic(commands.Cog):
 
             if should_respond:
                 # --- PASSIVE LEARNING ---
-                if self.bot.PASSIVE_LEARNING_ENABLED and message.attachments:
+                if self.bot.PASSIVE_LEARNING_ENABLED:
                     image_bytes, mime_type = None, None
-                    for att in message.attachments:
-                        if "image" in att.content_type and att.size < 8 * 1024 * 1024:
-                            image_bytes = await att.read()
-                            mime_type = att.content_type
-                            break
                     
-                    if image_bytes:
-                        if extracted_facts := await extract_facts_from_message(self.bot, message, author_name=None, image_bytes=image_bytes, mime_type=mime_type):
-                            for key, value in extracted_facts.items():
-                                await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
-                                logging.info(f"👁️ Learned visual fact: {key}={value}")
+                    # Check for images first, just in case
+                    if message.attachments:
+                        for att in message.attachments:
+                            if "image" in att.content_type and att.size < 8 * 1024 * 1024:
+                                image_bytes = await att.read()
+                                mime_type = att.content_type
+                                break
+                    
+                    # Run the extractor on the message (whether it has an image or just text!)
+                    async def background_learn():
+                        try:
+                            if extracted_facts := await extract_facts_from_message(self.bot, message, author_name=None, image_bytes=image_bytes, mime_type=mime_type):
+                                for key, value in extracted_facts.items():
+                                    await self.bot.firestore_service.save_user_profile_fact(str(message.author.id), str(message.guild.id) if message.guild else None, key, value)
+                                    logging.info(f"👁️ Learned fact: {key}={value}")
+                        except Exception as e:
+                            logging.error(f"Passive learning failed silently: {e}")
+                            
+                    # Run it in the background so it doesn't slow down his chat responses
+                    asyncio.create_task(background_learn())
 
                 # --- DETERMINE INTENT ---
                 intent, args = await ai_classifiers.get_intent_from_prompt(self.bot, message)
