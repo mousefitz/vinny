@@ -736,7 +736,7 @@ class VinnyLogic(commands.Cog):
                 horoscope_text = self.horoscope_cache["data"][clean_sign]
             else:
                 # Fetch a new one if it's the first time today
-                vinnyfied_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
+                horoscope_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
                 try:
                     import aiohttp
                     
