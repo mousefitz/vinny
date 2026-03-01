@@ -718,6 +718,9 @@ class VinnyLogic(commands.Cog):
         if clean_sign not in valid_signs: 
             return await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
         
+        # --- THE FIX: Initialize the variable at the very top to prevent UnboundLocalError ---
+        horoscope_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
+        
         # --- BULLETPROOF CACHE SETUP ---
         if not hasattr(self, 'horoscope_cache'):
             self.horoscope_cache = {"date": None, "data": {}}
@@ -736,10 +739,8 @@ class VinnyLogic(commands.Cog):
                 horoscope_text = self.horoscope_cache["data"][clean_sign]
             else:
                 # Fetch a new one if it's the first time today
-                horoscope_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
                 try:
                     import aiohttp
-                    
                     async with aiohttp.ClientSession() as session:
                         api_url = f"https://freehoroscopeapi.com/api/v1/get-horoscope/daily?sign={clean_sign}&day=today"
                         async with session.get(api_url) as resp:
