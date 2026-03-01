@@ -27,7 +27,8 @@ async def extract_facts_from_message(bot_instance, message_or_str: discord.Messa
         "    - The user claims it is them (e.g., 'me', 'my selfie').\n"
         "    - The user implies it is a reference for their appearance (e.g., 'use this photo', 'look at this').\n"
         "3.  **Format:** Return a JSON object where keys are attributes (e.g., 'hair_color', 'pet', 'hometown') and values are short strings.\n"
-        "4.  **Empty:** If no facts are found, return {}.\n\n"
+        "4.  **Empty:** If no facts are found, return {}.\n"
+        "5.  **No Art Prompts:** Ignore requests for drawings, image generation, or hypothetical scenarios (e.g., 'draw me like Lisa Frank', 'paint me as a dog'). Do NOT infer preferences from art requests.\n\n"
         f"## User Input:\n"
         f"Author: '{user_name}'\nMessage: \"{user_message}\""
     )
