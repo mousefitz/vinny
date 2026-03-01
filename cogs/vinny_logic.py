@@ -718,7 +718,7 @@ class VinnyLogic(commands.Cog):
         if clean_sign not in valid_signs: 
             return await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
         
-        # --- THE FIX: Initialize the variable at the very top to prevent UnboundLocalError ---
+        # --- THE FIX: Initialize the variable at the very top ---
         horoscope_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
         
         # --- BULLETPROOF CACHE SETUP ---
@@ -746,10 +746,22 @@ class VinnyLogic(commands.Cog):
                         async with session.get(api_url) as resp:
                             if resp.status == 200:
                                 json_data = await resp.json()
-                                # The FreeHoroscopeAPI returns the text inside data -> horoscope_data
-                                if "data" in json_data and "horoscope_data" in json_data["data"]:
-                                    horoscope_text = json_data["data"]["horoscope_data"]
-                                    self.horoscope_cache["data"][clean_sign] = horoscope_text
+                                
+                                # --- THE FIX: Handle different JSON structures safely ---
+                                if "data" in json_data:
+                                    # If the data is directly a string, use it
+                                    if isinstance(json_data["data"], str):
+                                        horoscope_text = json_data["data"]
+                                    # If it's a dictionary, look for the nested key
+                                    elif isinstance(json_data["data"], dict) and "horoscope_data" in json_data["data"]:
+                                        horoscope_text = json_data["data"]["horoscope_data"]
+                                    # If it's anything else, convert it to a string so it doesn't crash
+                                    else:
+                                        horoscope_text = str(json_data["data"])
+                                elif "horoscope" in json_data:
+                                    horoscope_text = json_data["horoscope"]
+                                
+                                self.horoscope_cache["data"][clean_sign] = horoscope_text
                                     
                 except Exception as e: 
                     import logging
