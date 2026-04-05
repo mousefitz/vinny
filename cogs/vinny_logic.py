@@ -1253,9 +1253,11 @@ class VinnyLogic(commands.Cog):
             try:
                 # --- CREATE (If missing) ---
                 if not role:
+                    # Native Discord.py implementation using secondary_color
                     role = await ctx.guild.create_role(
                         name=ctx.author.name,
                         color=color_obj_1,
+                        secondary_color=color_obj_2,
                         reason="Vinny Custom Role"
                     )
                     
@@ -1274,26 +1276,33 @@ class VinnyLogic(commands.Cog):
                 if role not in ctx.author.roles:
                     await ctx.author.add_roles(role)
 
-                # UPDATE EXISTING ROLE
+                # --- UPDATE EXISTING ROLE ---
+                # Passes both color objects natively just like HueTweaker does
                 await role.edit(
                     color=color_obj_1,
+                    secondary_color=color_obj_2,
                     reason="Vinny Color Update"
                 )
 
                 # --- CONFIRMATION ---
                 c1_disp = f"#{hex1_str}"
-                # Still output the gradient text to the user if they asked for it, 
-                # even though Discord only applies the first color to the actual role.
                 c2_disp = f"#{hex2_str}" if hex2_str else None
 
                 if color_obj_2:
-                    await ctx.send(f"i can't do actual gradients in discord, pal, but i set **{role.name}** to **{c1_disp}**.")
+                    await ctx.send(f"set **{role.name}** to a fresh gradient from **{c1_disp}** to **{c2_disp}**.")
                 else:
                     await ctx.send(f"set **{role.name}** to **{c1_disp}**.")
 
+            except discord.HTTPException as e:
+                # Discord natively rejects the secondary_color payload if the server lacks Boosts
+                if e.status == 400 or "premium" in str(e).lower() or "boost" in str(e).lower():
+                    await ctx.send("discord rejected the gradient! your server needs at least **2 Server Boosts** to unlock enhanced role styles. tell your friends to open their wallets.")
+                else:
+                    await ctx.send(f"my brain glitched trying to set the color: {e}")
             except discord.Forbidden:
                 await ctx.send("i can't edit that role. is it higher than mine?")
             except Exception as e:
+                import logging
                 logging.error(f"Role Error: {e}", exc_info=True)
                 await ctx.send(f"something broke: {e}")
 
