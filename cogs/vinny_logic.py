@@ -718,8 +718,8 @@ class VinnyLogic(commands.Cog):
         if clean_sign not in valid_signs: 
             return await ctx.send(f"'{sign}'? that ain't a star sign, pal. try one of these: {', '.join(valid_signs)}.")
         
-        # --- THE FIX: Initialize the variable at the very top ---
-        horoscope_text = "the stars are all fuzzy today. couldn't get a readin'. maybe they're drunk."
+        # Initialize the variable at the very top
+        horoscope_text = "The stars are all fuzzy today. Couldn't get a reading."
         
         # --- BULLETPROOF CACHE SETUP ---
         if not hasattr(self, 'horoscope_cache'):
@@ -747,15 +747,18 @@ class VinnyLogic(commands.Cog):
                             if resp.status == 200:
                                 json_data = await resp.json()
                                 
-                                # --- THE FIX: Handle different JSON structures safely ---
+                                # --- THE FIX: Handle the new key name ---
                                 if "data" in json_data:
-                                    # If the data is directly a string, use it
                                     if isinstance(json_data["data"], str):
                                         horoscope_text = json_data["data"]
-                                    # If it's a dictionary, look for the nested key
-                                    elif isinstance(json_data["data"], dict) and "horoscope_data" in json_data["data"]:
-                                        horoscope_text = json_data["data"]["horoscope_data"]
-                                    # If it's anything else, convert it to a string so it doesn't crash
+                                    elif isinstance(json_data["data"], dict):
+                                        # Check for both the old key and the new key they just swapped to
+                                        if "horoscope_data" in json_data["data"]:
+                                            horoscope_text = json_data["data"]["horoscope_data"]
+                                        elif "horoscope" in json_data["data"]:
+                                            horoscope_text = json_data["data"]["horoscope"]
+                                        else:
+                                            horoscope_text = str(json_data["data"])
                                     else:
                                         horoscope_text = str(json_data["data"])
                                 elif "horoscope" in json_data:
@@ -1305,46 +1308,88 @@ class VinnyLogic(commands.Cog):
                 import logging
                 logging.error(f"Role Error: {e}", exc_info=True)
                 await ctx.send(f"something broke: {e}")
+                
+    @commands.group(name='rolesetup', invoke_without_command=True)
+    @commands.has_permissions(manage_roles=True)
+    async def rolesetup_command(self, ctx):
+        """Admin config for the custom role system."""
+        embed = discord.Embed(title="⚙️ Role Setup Commands", color=discord.Color.dark_grey())
+        embed.add_field(name="`!rolesetup channel #channel`", value="Locks the color commands to a specific channel.", inline=False)
+        embed.add_field(name="`!rolesetup anchor @role`", value="Forces new custom roles to be created right below this role.", inline=False)
+        await ctx.send(embed=embed)
+
+    @rolesetup_command.command(name='channel')
+    @commands.has_permissions(manage_roles=True)
+    async def rolesetup_channel(self, ctx, channel: discord.TextChannel):
+        server_profile = await self.bot.firestore_service.get_user_profile(str(ctx.guild.id), None)
+        role_config = {}
+        if server_profile and "role_config" in server_profile:
+            import json
+            try: role_config = json.loads(server_profile["role_config"])
+            except: pass
+        
+        role_config["allowed_channel_id"] = str(channel.id)
+        
+        import json
+        await self.bot.firestore_service.save_user_profile_fact(str(ctx.guild.id), None, "role_config", json.dumps(role_config))
+        await ctx.send(f"locked it down. users can only change their colors in {channel.mention} now.")
+
+    @rolesetup_command.command(name='anchor')
+    @commands.has_permissions(manage_roles=True)
+    async def rolesetup_anchor(self, ctx, role: discord.Role):
+        server_profile = await self.bot.firestore_service.get_user_profile(str(ctx.guild.id), None)
+        role_config = {}
+        if server_profile and "role_config" in server_profile:
+            import json
+            try: role_config = json.loads(server_profile["role_config"])
+            except: pass
+            
+        role_config["anchor_role_id"] = str(role.id)
+        
+        import json
+        await self.bot.firestore_service.save_user_profile_fact(str(ctx.guild.id), None, "role_config", json.dumps(role_config))
+        await ctx.send(f"got it. any new custom colors i make will be slid right underneath **{role.name}**.")
 
     @commands.command(name='rolename')
     async def rolename_command(self, ctx, *, new_name: str):
-        """
-        Renames your custom color role.
-        Usage: !rolename Poopy Butt
-        """
+        """Allows a user to rename their custom color role."""
         if not ctx.guild: return await ctx.send("server only, pal.")
         
+        # Enforce Channel Lock
+        server_profile = await self.bot.firestore_service.get_user_profile(str(ctx.guild.id), None)
+        role_config = {}
+        if server_profile and "role_config" in server_profile:
+            import json
+            try: role_config = json.loads(server_profile["role_config"])
+            except: pass
+            
+        allowed_channel_id = role_config.get("allowed_channel_id")
+        if allowed_channel_id and str(ctx.channel.id) != allowed_channel_id:
+            return await ctx.send(f"hey! take this over to <#{allowed_channel_id}>.")
+
+        # Discord role names have a hard limit
+        if len(new_name) > 100:
+            return await ctx.send("that name's way too long. keep it under 100 characters.")
+
+        # Fetch their role from the database
         user_id = str(ctx.author.id)
         guild_id = str(ctx.guild.id)
-        
-        # 1. FIND THE ROLE
         profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
-        role = None
         
-        # Try ID
-        if profile and "custom_role_id" in profile:
-            role = ctx.guild.get_role(int(profile["custom_role_id"]))
-        
-        # Fallback to Name
+        if not profile or "custom_role_id" not in profile:
+            return await ctx.send("you don't have a custom role yet! use `!rolecolor` to make one first.")
+            
+        role = ctx.guild.get_role(int(profile["custom_role_id"]))
         if not role:
-            role = discord.utils.get(ctx.guild.roles, name=ctx.author.name)
-
-        if not role:
-            return await ctx.send("you don't have a custom role yet. use `!rolecolor` first.")
-
-        # 2. RENAME
-        old_name = role.name
+            return await ctx.send("i can't find your role in the server. it might have been deleted. use `!rolecolor` to make a new one.")
+            
         try:
-            await role.edit(name=new_name, reason=f"Vinny Rename by {ctx.author.name}")
-            
-            # Save ID just in case it wasn't saved before
-            await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, "custom_role_id", str(role.id))
-            
-            await ctx.send(f"changed your role from **{old_name}** to **{new_name}**. fancy.")
+            await role.edit(name=new_name, reason="User requested role name change via Vinny")
+            await ctx.send(f"bam. your role name is now **{new_name}**.")
         except discord.Forbidden:
-            await ctx.send("i can't rename that role. permissions issue?")
-        except Exception:
-            await ctx.send("something broke. couldn't rename it.")
+            await ctx.send("i don't have permission to edit your role. make sure it's below my highest role in the server settings.")
+        except Exception as e:
+            await ctx.send(f"my brain glitched trying to change your role name: {e}")
             
 async def setup(bot):
     await bot.add_cog(VinnyLogic(bot))
