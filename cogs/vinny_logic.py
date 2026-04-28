@@ -581,11 +581,41 @@ class VinnyLogic(commands.Cog):
 
     @commands.command(name='forgetme')
     async def forgetme_command(self, ctx):
-        if not ctx.guild: return await ctx.send("this only works in a server, pal.")
-        if await self.bot.firestore_service.delete_user_profile(str(ctx.author.id), str(ctx.guild.id)):
-            await ctx.send(f"aight, {ctx.author.mention}. i scrambled my brains. who are you again?")
-        else:
-            await ctx.send("my head's already empty, pal.")
+        """Erases personal facts but keeps operational stats."""
+        user_id = str(ctx.author.id)
+        guild_id = str(ctx.guild.id) if ctx.guild else None
+        
+        profile = await self.bot.firestore_service.get_user_profile(user_id, guild_id)
+        
+        if not profile:
+            return await ctx.send("i don't even know you, pal. nothing to forget.")
+            
+        # --- THE FIX: Define the operational keys Vinny is NOT allowed to delete ---
+        protected_keys = ["chat_sends", "relationship_score", "custom_role_id", "role_config"]
+        
+        # Find all the keys that AREN'T protected (the actual personal facts he learned)
+        facts_to_delete = [key for key in profile.keys() if key not in protected_keys]
+        
+        if not facts_to_delete:
+            return await ctx.send("i don't have any personal trivia on you anyway. my brain is already empty.")
+            
+        async with ctx.typing():
+            try:
+                # Loop through and only delete the unprotected facts
+                for key in facts_to_delete:
+                    # If your firestore_service has a dedicated delete method:
+                    if hasattr(self.bot.firestore_service, 'delete_user_profile_fact'):
+                        await self.bot.firestore_service.delete_user_profile_fact(user_id, guild_id, key)
+                    else:
+                        # Fallback: Overwrite the fact as an empty string or None so it doesn't show up in his memory
+                        from google.cloud import firestore
+                        await self.bot.firestore_service.save_user_profile_fact(user_id, guild_id, key, firestore.DELETE_FIELD)
+                        
+                await ctx.send("done. i wiped all your personal trivia from my brain, but kept our stats.")
+            except Exception as e:
+                import logging
+                logging.error(f"Forgetme Error: {e}", exc_info=True)
+                await ctx.send(f"glitched out trying to wipe your file: {e}")
 
     @commands.command(name='propose')
     async def propose_command(self, ctx, member: discord.Member):
