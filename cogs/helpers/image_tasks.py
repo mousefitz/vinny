@@ -316,7 +316,35 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
 
                 await message.channel.send(random.choice(["mixing the paints...", "loading the canvas..."]))
 
-                image_obj, count = await api_clients.generate_image_with_genai(bot_instance.FAL_KEY, enhanced_prompt, model="fal-ai/flux-2/flash")
+                # --- THE FIX: Bypass api_clients and use our proven async submit method ---
+                logger.info(f"Requesting Flux image for prompt: {enhanced_prompt[:50]}...")
+                
+                image_obj = None
+                count = 0
+                
+                try:
+                    handler = await fal_client.submit_async(
+                        "fal-ai/flux-2/flash", 
+                        arguments={
+                            "prompt": enhanced_prompt,
+                            "image_size": "landscape_4_3",
+                            "num_images": 1,
+                            "enable_safety_checker": False
+                        }
+                    )
+                    
+                    # Wait for the image generation to complete
+                    result = await handler.get()
+                    
+                    if result and "images" in result and len(result["images"]) > 0:
+                        import aiohttp
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(result["images"][0]["url"]) as resp:
+                                if resp.status == 200:
+                                    image_obj = io.BytesIO(await resp.read())
+                                    count = 1
+                except Exception as fal_error:
+                    logger.error(f"Fal.ai direct generation failed: {fal_error}")
 
                 if image_obj and count > 0:
                     try:

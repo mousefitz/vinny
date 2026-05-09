@@ -20,6 +20,17 @@ from utils.fact_extractor import extract_facts_from_message
 # Helper Imports
 from cogs.helpers import ai_classifiers, utilities, image_tasks, conversation_tasks
 
+@contextlib.asynccontextmanager
+async def safe_typing(channel):
+    """Safely triggers typing without crashing if Discord rate-limits it."""
+    try:
+        # A single trigger lasts for 10 seconds natively, which is plenty of time for Fal/Gemini
+        await channel.trigger_typing()
+    except Exception:
+        pass # If Discord rate-limits the typing status, just ignore it and proceed!
+    
+    yield # Continue executing the code inside the block no matter what
+
 # Compile a regex for finding URLs
 URL_PATTERN = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
 
@@ -340,7 +351,7 @@ class VinnyLogic(commands.Cog):
                 # --- 3. PROCESS THE MESSAGE ---
                 typing_ctx = message.channel.typing() if not is_autonomous else contextlib.nullcontext()
                 
-                async with typing_ctx:
+                async with safe_typing(message.channel):
                     if intent == "generate_image":
                         raw_prompt = args.get("prompt", cleaned_content)
                         clean_prompt = re.sub(r'\b(vinny|vincenzo|vin|draw|paint|make|generate|please)\b', '', raw_prompt, flags=re.IGNORECASE).strip()
