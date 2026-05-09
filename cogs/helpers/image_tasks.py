@@ -11,6 +11,16 @@ from PIL import Image
 from google.genai import types
 from utils import api_clients
 from . import ai_classifiers
+import contextlib
+
+@contextlib.asynccontextmanager
+async def safe_typing(channel):
+    """Safely triggers typing without crashing if Discord rate-limits it."""
+    try:
+        await channel.trigger_typing()
+    except Exception:
+        pass
+    yield
 
 # Setup Logger
 logger = logging.getLogger(__name__)

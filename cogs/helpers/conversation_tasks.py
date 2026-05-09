@@ -9,7 +9,17 @@ from utils import constants
 from bs4 import BeautifulSoup
 from utils import api_clients
 from readability import Document
+import contextlib
 
+@contextlib.asynccontextmanager
+async def safe_typing(channel):
+    """Safely triggers typing without crashing if Discord rate-limits it."""
+    try:
+        await channel.trigger_typing()
+    except Exception:
+        pass
+    yield
+    
 async def get_keywords_for_memory_search(bot_instance, text: str):
     """
     Extracts semantic keywords using AI, with a Regex fallback for speed/safety.
