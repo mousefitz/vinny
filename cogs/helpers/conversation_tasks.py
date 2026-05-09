@@ -291,7 +291,7 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
                     prompt_parts.append(types.Part(inline_data=types.Blob(mime_type=attachment.content_type, data=image_bytes)))
                     break 
                 elif "video" in attachment.content_type or "audio" in attachment.content_type:
-                    async with message.channel.typing():
+                    async with safe_typing(message.channel):
                         temp_filename = f"temp_{message.id}_{attachment.filename}"
                         await attachment.save(temp_filename)
                         try:
@@ -313,7 +313,7 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
         history = [types.Content(role='user', parts=prompt_parts)]
         
         # ADD THIS: Show the typing indicator while Gemini thinks!
-        async with message.channel.typing():
+        async with safe_typing(message.channel):
             response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=history, config=config)
 
         if uploaded_media_file:
@@ -326,7 +326,7 @@ async def handle_text_or_image_response(bot_instance, message: discord.Message, 
             if cleaned_response and cleaned_response.lower() != '[silence]':
                 if is_autonomous:
                     typing_delay = min(len(cleaned_response) * 0.05, 8.0)
-                    async with message.channel.typing():
+                    async with safe_typing(message.channel):
                         await asyncio.sleep(typing_delay)
                         for chunk in bot_instance.split_message(cleaned_response):
                             if chunk: await message.channel.send(chunk.lower())
@@ -370,7 +370,7 @@ async def handle_knowledge_request(bot_instance, message: discord.Message, targe
         f"3.  Do not just list the facts. Interpret them, connect them, or be confused by them in your own unique voice."
     )
     try:
-        async with message.channel.typing():
+        async with safe_typing(message.channel):
             response = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME, 
                 contents=[summary_prompt], 
@@ -397,7 +397,7 @@ async def handle_server_knowledge_request(bot_instance, message: discord.Message
     formatted_summaries = "\n".join([f"- {s.get('summary', '...a conversation i already forgot.')}" for s in summaries])
     synthesis_prompt = (f"# --- YOUR TASK ---\nA user, '{message.author.display_name}', is asking what you've learned from overhearing conversations in this server. Your task is to synthesize the provided conversation summaries into a single, chaotic, and insightful monologue. Obey all your personality directives.\n\n## CONVERSATION SUMMARIES I'VE OVERHEARD:\n{formatted_summaries}\n\n## INSTRUCTIONS:\n1.  Read all the summaries to get a feel for the server's vibe.\n2.  Do NOT just list the summaries. Weave them together into a story or a series of scattered, in-character thoughts.\n3.  Generate a short, lowercase, typo-ridden response that shows what you've gleaned from listening in.")
     try:
-        async with message.channel.typing():
+        async with safe_typing(message.channel):
             response = await bot_instance.make_tracked_api_call(model=bot_instance.MODEL_NAME, contents=[synthesis_prompt], config=bot_instance.GEMINI_TEXT_CONFIG)
             if response and response.text:
                 await message.channel.send(response.text.strip())
@@ -424,7 +424,7 @@ async def handle_correction(bot_instance, message: discord.Message):
     
     try:
         json_config = types.GenerateContentConfig(response_mime_type="application/json")
-        async with message.channel.typing():
+        async with safe_typing(message.channel):
             # First API Call: Get the list of concepts
             response1 = await bot_instance.make_tracked_api_call(
                 model=bot_instance.MODEL_NAME, 

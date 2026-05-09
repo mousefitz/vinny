@@ -191,7 +191,7 @@ class VinnyLogic(commands.Cog):
                             target_url = past_urls[0]
                             break
                 if target_url:
-                    async with message.channel.typing():
+                    async with safe_typing(message.channel):
                         summary = await conversation_tasks.summarize_url(self.bot, self.bot.http_session, target_url)
                         await message.reply(summary)
                     return 
@@ -230,7 +230,7 @@ class VinnyLogic(commands.Cog):
                         # --- EXECUTE EDIT ---
                         if is_edit:
                             logging.info(f"🎨 EDIT DETECTED: '{cleaned_content}'")
-                            async with message.channel.typing():
+                            async with safe_typing(message.channel):
                                 
                                 # Download Image
                                 input_image_bytes = None
@@ -290,7 +290,7 @@ class VinnyLogic(commands.Cog):
                     # --- IF NOT AN EDIT, HANDLE AS CHAT ---
                     if is_reply_to_vinny or is_addressed:
                         await self.update_vinny_mood()
-                        async with message.channel.typing():
+                        async with safe_typing(message.channel):
                             await conversation_tasks.handle_direct_reply(self.bot, message)
                         return
 

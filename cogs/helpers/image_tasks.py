@@ -166,7 +166,7 @@ async def handle_image_request(bot_instance, message: discord.Message, image_pro
     """
     The Master Image Function: Handles Generation, Editing, and Vision.
     """
-    async with message.channel.typing():
+    async with safe_typing(message.channel):
         # --- 0. CHECK FOR EDIT MODE ---
         is_edit_mode = (input_image_bytes is not None)
         
